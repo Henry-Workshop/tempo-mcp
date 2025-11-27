@@ -1,0 +1,35 @@
+{
+  "name": "@bamboosoft/tempo-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Tempo time tracking with full support for roles and accounts",
+  "main": "dist/index.js",
+  "bin": {
+    "tempo-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "tempo",
+    "jira",
+    "time-tracking",
+    "worklog"
+  ],
+  "author": "Bamboosoft",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "ts-node": "^10.9.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
