@@ -6,6 +6,8 @@ MCP (Model Context Protocol) server for Tempo time tracking with full support fo
 
 - Create worklogs with role and account attributes
 - Automatically fetch account from Jira issue
+- **Auto-fallback to active account** when issue's account is closed/archived
+- **Quick sprint meeting logging** - just specify project and minutes
 - Update and delete worklogs
 - List worklogs for date ranges
 - Get available work attributes and roles
@@ -23,8 +25,8 @@ Set the following environment variables:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `TEMPO_API_TOKEN` | Yes | Tempo API token |
-| `JIRA_API_TOKEN` | Yes | Jira API token |
+| `TEMPO_API_TOKEN` | Yes | Tempo API token (get from Tempo > Settings > API Integration) |
+| `JIRA_API_TOKEN` | Yes | Jira API token (get from id.atlassian.com/manage-profile/security/api-tokens) |
 | `JIRA_EMAIL` | Yes | Jira account email |
 | `JIRA_BASE_URL` | Yes | Jira base URL (e.g., https://company.atlassian.net) |
 | `JIRA_ACCOUNT_FIELD_ID` | No | Custom field ID for Tempo account (default: 10026) |
@@ -35,28 +37,46 @@ Set the following environment variables:
 Add to your Claude Code MCP configuration:
 
 ```bash
-claude mcp add tempo-mcp -s user \
-  -e TEMPO_API_TOKEN=your-tempo-token \
-  -e JIRA_API_TOKEN=your-jira-token \
-  -e JIRA_EMAIL=your-email@company.com \
-  -e JIRA_BASE_URL=https://company.atlassian.net \
-  -e JIRA_ACCOUNT_FIELD_ID=10026 \
-  -e DEFAULT_ROLE=Dev \
-  -- node /path/to/tempo-mcp/dist/index.js
+claude mcp add tempo-mcp -s user   -e TEMPO_API_TOKEN=your-tempo-token   -e JIRA_API_TOKEN=your-jira-token   -e JIRA_EMAIL=your-email@company.com   -e JIRA_BASE_URL=https://company.atlassian.net   -- node /path/to/tempo-mcp/dist/index.js
 ```
 
-Or with npx after publishing:
+### Example configuration in claude.json
 
-```bash
-claude mcp add tempo-mcp -s user \
-  -e TEMPO_API_TOKEN=your-tempo-token \
-  -e JIRA_API_TOKEN=your-jira-token \
-  -e JIRA_EMAIL=your-email@company.com \
-  -e JIRA_BASE_URL=https://company.atlassian.net \
-  -- npx @bamboosoft/tempo-mcp
+```json
+{
+  "mcpServers": {
+    "tempo-mcp": {
+      "command": "node",
+      "args": ["/path/to/tempo-mcp/dist/index.js"],
+      "env": {
+        "TEMPO_API_TOKEN": "your-tempo-token",
+        "JIRA_API_TOKEN": "your-jira-token",
+        "JIRA_EMAIL": "your-email@company.com",
+        "JIRA_BASE_URL": "https://company.atlassian.net"
+      }
+    }
+  }
+}
 ```
 
 ## Available Tools
+
+### tempo_log_sprint_meeting
+
+Quick way to log time for sprint meetings (daily, planning, retro). Automatically finds the "Sprint Meetings" issue for the project.
+
+```json
+{
+  "projectKey": "PROJ",
+  "timeSpentMinutes": 15,
+  "description": "Daily",
+  "date": "2025-11-27"
+}
+```
+
+**Example usage in Claude Code:**
+- "add 15 mins for sprint meetings for BERGA"
+- "log daily 15 mins to CRC project"
 
 ### tempo_create_worklog
 
@@ -73,7 +93,7 @@ Create a new worklog with role and account support.
 }
 ```
 
-If `accountKey` is not provided, it will be automatically fetched from the Jira issue.
+If `accountKey` is not provided, it will be automatically fetched from the Jira issue. If the account is closed/archived, it will automatically find an active account from recent project issues.
 
 ### tempo_get_worklogs
 
