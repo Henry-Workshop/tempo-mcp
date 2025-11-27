@@ -132,7 +132,7 @@ export class TempoClient {
     // Fetch work attributes to get the correct keys for role and account
     const attributes = await this.getWorkAttributes();
     for (const attr of attributes) {
-      if (attr.type === "STATIC_LIST" && attr.name.toLowerCase().includes("role")) {
+      if (attr.type === "STATIC_LIST") {
         this.roleAttributeKey = attr.key;
       } else if (attr.type === "ACCOUNT") {
         this.accountAttributeKey = attr.key;
