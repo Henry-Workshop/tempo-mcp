@@ -64,12 +64,12 @@ claude mcp add tempo-mcp -s user `
   -e JIRA_API_TOKEN=your-jira-token `
   -e JIRA_EMAIL=your-email@company.com `
   -e JIRA_BASE_URL=https://company.atlassian.net `
-  -- npx -y github:Henry-Workshop/tempo-mcp
+  -- npx.cmd -y github:Henry-Workshop/tempo-mcp
 ```
 
 **Windows (CMD - single line):**
 ```cmd
-claude mcp add tempo-mcp -s user -e TEMPO_API_TOKEN=your-tempo-token -e JIRA_API_TOKEN=your-jira-token -e JIRA_EMAIL=your-email@company.com -e JIRA_BASE_URL=https://company.atlassian.net -- npx -y github:Henry-Workshop/tempo-mcp
+claude mcp add tempo-mcp -s user -e TEMPO_API_TOKEN=your-tempo-token -e JIRA_API_TOKEN=your-jira-token -e JIRA_EMAIL=your-email@company.com -e JIRA_BASE_URL=https://company.atlassian.net -- npx.cmd -y github:Henry-Workshop/tempo-mcp
 ```
 
 ### Example configuration in claude.json
