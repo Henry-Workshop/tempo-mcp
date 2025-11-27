@@ -195,7 +195,7 @@ export class TempoClient {
   }
   async findSprintMeetingsIssue(projectKey: string): Promise<string | null> {
     const jql = encodeURIComponent(`project = ${projectKey} AND summary ~ "Sprint Meetings" ORDER BY created ASC`);
-    const response = await this.jiraRequest<{ issues: Array<{ key: string }> }>(`/rest/api/2/search?jql=${jql}&maxResults=1&fields=summary`);
+    const response = await this.jiraRequest<{ issues: Array<{ key: string }> }>(`/rest/api/3/search/jql?jql=${jql}&maxResults=1&fields=summary`);
     if (response.issues && response.issues.length > 0) {
       return response.issues[0].key;
     }
