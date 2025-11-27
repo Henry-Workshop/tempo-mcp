@@ -21,7 +21,23 @@ npm run build
 
 ## Configuration
 
-Set the following environment variables:
+### Getting your API tokens
+
+**Tempo API Token:**
+1. Go to [Tempo > Settings](https://app.tempo.io/settings) in your Jira instance
+2. Click on **API Integration** in the left sidebar
+3. Click **New Token**
+4. Give it a name (e.g., "Claude Code MCP")
+5. Select permissions: **Manage Worklogs** (or Full Access)
+6. Copy the generated token
+
+**Jira API Token:**
+1. Go to [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+2. Click **Create API token**
+3. Give it a label (e.g., "Claude Code MCP")
+4. Copy the generated token
+
+### Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
