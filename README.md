@@ -37,7 +37,7 @@ Set the following environment variables:
 Add to your Claude Code MCP configuration:
 
 ```bash
-claude mcp add tempo-mcp -s user   -e TEMPO_API_TOKEN=your-tempo-token   -e JIRA_API_TOKEN=your-jira-token   -e JIRA_EMAIL=your-email@company.com   -e JIRA_BASE_URL=https://company.atlassian.net   -- node /path/to/tempo-mcp/dist/index.js
+claude mcp add tempo-mcp -s user   -e TEMPO_API_TOKEN=your-tempo-token   -e JIRA_API_TOKEN=your-jira-token   -e JIRA_EMAIL=your-email@company.com   -e JIRA_BASE_URL=https://company.atlassian.net   -- npx -y github:Henry-Workshop/tempo-mcp
 ```
 
 ### Example configuration in claude.json
@@ -46,8 +46,8 @@ claude mcp add tempo-mcp -s user   -e TEMPO_API_TOKEN=your-tempo-token   -e JIRA
 {
   "mcpServers": {
     "tempo-mcp": {
-      "command": "node",
-      "args": ["/path/to/tempo-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "github:Henry-Workshop/tempo-mcp"],
       "env": {
         "TEMPO_API_TOKEN": "your-tempo-token",
         "JIRA_API_TOKEN": "your-jira-token",
