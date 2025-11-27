@@ -129,7 +129,6 @@ export class TempoClient {
   }
 
   async initialize(): Promise<void> {
-    // Fetch work attributes to get the correct keys for role and account
     const attributes = await this.getWorkAttributes();
     for (const attr of attributes) {
       if (attr.type === "STATIC_LIST") {
@@ -166,8 +165,10 @@ export class TempoClient {
       `/rest/api/2/issue/${issueKey}?fields=customfield_${this.accountFieldId}`
     );
     const accountField = issue.fields[`customfield_${this.accountFieldId}`];
-    if (accountField && typeof accountField === "object" && "key" in accountField) {
-      return (accountField as { key: string }).key;
+    if (accountField && typeof accountField === "object") {
+      const obj = accountField as Record<string, unknown>;
+      if (typeof obj.value === "string") return obj.value;
+      if (typeof obj.key === "string") return obj.key;
     }
     if (typeof accountField === "string") {
       return accountField;
@@ -199,7 +200,6 @@ export class TempoClient {
     const issueId = await this.getIssueId(params.issueKey);
     const authorAccountId = await this.getCurrentUserAccountId();
 
-    // Get account from issue if not provided
     let accountKey = params.accountKey;
     if (!accountKey) {
       accountKey = await this.getIssueAccount(params.issueKey) || undefined;
