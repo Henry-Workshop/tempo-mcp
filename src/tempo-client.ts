@@ -202,6 +202,26 @@ export class TempoClient {
     return null;
   }
 
+  async findActiveProjectAccount(projectKey: string): Promise<string | null> {
+    const jql = encodeURIComponent(`project = ${projectKey} AND status != Done ORDER BY updated DESC`);
+    const response = await this.jiraRequest<{ issues: Array<{ key: string; fields: Record<string, unknown> }> }>(
+      `/rest/api/3/search/jql?jql=${jql}&maxResults=10&fields=customfield_${this.accountFieldId}`
+    );
+    if (response.issues) {
+      for (const issue of response.issues) {
+        const accountField = issue.fields[`customfield_${this.accountFieldId}`];
+        if (accountField && typeof accountField === "object") {
+          const obj = accountField as Record<string, unknown>;
+          if (typeof obj.value === "string") return obj.value;
+          if (typeof obj.key === "string") return obj.key;
+        }
+        if (typeof accountField === "string") return accountField;
+      }
+    }
+    return null;
+  }
+
+
 
   async createWorklog(params: CreateWorklogParams): Promise<TempoWorklog> {
     await this.initialize();
@@ -215,37 +235,53 @@ export class TempoClient {
     }
 
     const role = params.role || this.defaultRole;
+    const projectKey = params.issueKey.split('-')[0];
 
-    const attributes: Array<{ key: string; value: string }> = [];
+    const tryCreateWorklog = async (account: string | undefined): Promise<TempoWorklog> => {
+      const attributes: Array<{ key: string; value: string }> = [];
 
-    if (this.roleAttributeKey) {
-      attributes.push({ key: this.roleAttributeKey, value: role });
-    }
+      if (this.roleAttributeKey) {
+        attributes.push({ key: this.roleAttributeKey, value: role });
+      }
 
-    if (this.accountAttributeKey && accountKey) {
-      attributes.push({ key: this.accountAttributeKey, value: accountKey });
-    }
+      if (this.accountAttributeKey && account) {
+        attributes.push({ key: this.accountAttributeKey, value: account });
+      }
 
-    const body: Record<string, unknown> = {
-      issueId,
-      timeSpentSeconds: Math.round(params.timeSpentHours * 3600),
-      startDate: params.date,
-      description: params.description || "",
-      authorAccountId,
+      const body: Record<string, unknown> = {
+        issueId,
+        timeSpentSeconds: Math.round(params.timeSpentHours * 3600),
+        startDate: params.date,
+        description: params.description || "",
+        authorAccountId,
+      };
+
+      if (params.startTime) {
+        body.startTime = params.startTime;
+      }
+
+      if (attributes.length > 0) {
+        body.attributes = attributes;
+      }
+
+      return this.tempoRequest<TempoWorklog>("/worklogs", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
     };
 
-    if (params.startTime) {
-      body.startTime = params.startTime;
+    try {
+      return await tryCreateWorklog(accountKey);
+    } catch (error) {
+      const errorMsg = String(error);
+      if (errorMsg.includes("Account not found") || errorMsg.includes("Account is closed or archived")) {
+        const activeAccount = await this.findActiveProjectAccount(projectKey);
+        if (activeAccount && activeAccount !== accountKey) {
+          return await tryCreateWorklog(activeAccount);
+        }
+      }
+      throw error;
     }
-
-    if (attributes.length > 0) {
-      body.attributes = attributes;
-    }
-
-    return this.tempoRequest<TempoWorklog>("/worklogs", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
   }
 
   async updateWorklog(params: UpdateWorklogParams): Promise<TempoWorklog> {
