@@ -34,10 +34,26 @@ Set the following environment variables:
 
 ## Usage with Claude Code
 
-Add to your Claude Code MCP configuration:
+### Quick Setup (one command)
 
+**Linux/macOS:**
 ```bash
 claude mcp add tempo-mcp -s user   -e TEMPO_API_TOKEN=your-tempo-token   -e JIRA_API_TOKEN=your-jira-token   -e JIRA_EMAIL=your-email@company.com   -e JIRA_BASE_URL=https://company.atlassian.net   -- npx -y github:Henry-Workshop/tempo-mcp
+```
+
+**Windows (PowerShell):**
+```powershell
+claude mcp add tempo-mcp -s user `
+  -e TEMPO_API_TOKEN=your-tempo-token `
+  -e JIRA_API_TOKEN=your-jira-token `
+  -e JIRA_EMAIL=your-email@company.com `
+  -e JIRA_BASE_URL=https://company.atlassian.net `
+  -- npx -y github:Henry-Workshop/tempo-mcp
+```
+
+**Windows (CMD - single line):**
+```cmd
+claude mcp add tempo-mcp -s user -e TEMPO_API_TOKEN=your-tempo-token -e JIRA_API_TOKEN=your-jira-token -e JIRA_EMAIL=your-email@company.com -e JIRA_BASE_URL=https://company.atlassian.net -- npx -y github:Henry-Workshop/tempo-mcp
 ```
 
 ### Example configuration in claude.json
