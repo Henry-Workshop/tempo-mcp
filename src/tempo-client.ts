@@ -202,20 +202,25 @@ export class TempoClient {
     return null;
   }
 
-  async findActiveProjectAccount(projectKey: string): Promise<string | null> {
-    const jql = encodeURIComponent(`project = ${projectKey} AND status != Done ORDER BY updated DESC`);
+  async findActiveProjectAccount(projectKey: string, excludeAccount?: string): Promise<string | null> {
+    const jql = encodeURIComponent(`project = ${projectKey} ORDER BY updated DESC`);
     const response = await this.jiraRequest<{ issues: Array<{ key: string; fields: Record<string, unknown> }> }>(
-      `/rest/api/3/search/jql?jql=${jql}&maxResults=10&fields=customfield_${this.accountFieldId}`
+      `/rest/api/3/search/jql?jql=${jql}&maxResults=20&fields=customfield_${this.accountFieldId}`
     );
     if (response.issues) {
       for (const issue of response.issues) {
         const accountField = issue.fields[`customfield_${this.accountFieldId}`];
+        let account: string | null = null;
         if (accountField && typeof accountField === "object") {
           const obj = accountField as Record<string, unknown>;
-          if (typeof obj.value === "string") return obj.value;
-          if (typeof obj.key === "string") return obj.key;
+          if (typeof obj.value === "string") account = obj.value;
+          else if (typeof obj.key === "string") account = obj.key;
+        } else if (typeof accountField === "string") {
+          account = accountField;
         }
-        if (typeof accountField === "string") return accountField;
+        if (account && account !== excludeAccount) {
+          return account;
+        }
       }
     }
     return null;
@@ -275,7 +280,7 @@ export class TempoClient {
     } catch (error) {
       const errorMsg = String(error);
       if (errorMsg.includes("Account not found") || errorMsg.includes("Account is closed or archived")) {
-        const activeAccount = await this.findActiveProjectAccount(projectKey);
+        const activeAccount = await this.findActiveProjectAccount(projectKey, accountKey);
         if (activeAccount && activeAccount !== accountKey) {
           return await tryCreateWorklog(activeAccount);
         }
