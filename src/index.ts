@@ -184,6 +184,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
         },
       },
+      {
+        name: "tempo_log_sprint_meeting",
+        description: "Log time for sprint meetings (daily, planning, retro, etc). Automatically finds the 'Sprint Meetings' issue for the project.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            projectKey: {
+              type: "string",
+              description: "Project key (e.g., BERGA, SWIM)",
+            },
+            timeSpentMinutes: {
+              type: "number",
+              description: "Time spent in minutes (e.g., 15, 30, 60)",
+              exclusiveMinimum: 0,
+            },
+            description: {
+              type: "string",
+              description: "Description (e.g., Daily, Sprint Planning, Retro)",
+            },
+            date: {
+              type: "string",
+              description: "Date (YYYY-MM-DD). Defaults to today if not provided.",
+              pattern: "^\\d{4}-\\d{2}-\\d{2}$",
+            },
+          },
+          required: ["projectKey", "timeSpentMinutes", "description"],
+        },
+      },
     ],
   };
 });
@@ -325,6 +353,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ],
         };
       }
+
+      case "tempo_log_sprint_meeting": {
+        const { projectKey, timeSpentMinutes, description, date } = args as {
+          projectKey: string;
+          timeSpentMinutes: number;
+          description: string;
+          date?: string;
+        };
+
+        const issueKey = await tempoClient.findSprintMeetingsIssue(projectKey);
+        if (!issueKey) {
+          throw new Error(`No "Sprint Meetings" issue found for project ${projectKey}`);
+        }
+
+        const worklogDate = date || new Date().toISOString().split('T')[0];
+        const worklog = await tempoClient.createWorklog({
+          issueKey,
+          timeSpentHours: timeSpentMinutes / 60,
+          date: worklogDate,
+          description,
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Sprint meeting logged!\nID: ${worklog.tempoWorklogId}\nIssue: ${issueKey}\nTime: ${timeSpentMinutes} min\nDate: ${worklogDate}\nDescription: ${description}`,
+            },
+          ],
+        };
+      }
+
 
       default:
         throw new Error(`Unknown tool: ${name}`);
