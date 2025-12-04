@@ -12,6 +12,21 @@ export interface EmailTaskMatch {
     confidence: "high" | "medium" | "low";
     reason: string;
 }
+export interface CalendarEvent {
+    date: string;
+    title: string;
+    startTime: string;
+    endTime: string;
+    durationMinutes: number;
+    attendees: string[];
+    description?: string;
+}
+export interface CalendarTaskMatch {
+    event: CalendarEvent;
+    issueKey: string | null;
+    confidence: "high" | "medium" | "low";
+    reason: string;
+}
 export interface JiraProject {
     key: string;
     name: string;
@@ -159,6 +174,15 @@ export declare class TempoClient {
      * Fetch emails from Gmail via API for a date range
      */
     getEmails(startDate: string, endDate: string): Promise<EmailMessage[]>;
+    /**
+     * Fetch calendar events from Google Calendar for a date range
+     * Only includes events where user is attending (accepted or tentative)
+     */
+    getCalendarEvents(startDate: string, endDate: string): Promise<CalendarEvent[]>;
+    /**
+     * Match calendar events to Jira issues using AI-like similarity reasoning
+     */
+    matchCalendarEventsToJiraIssues(events: CalendarEvent[]): Promise<CalendarTaskMatch[]>;
     /**
      * Get all Jira projects (cached)
      */

@@ -25,6 +25,23 @@ export interface EmailTaskMatch {
   reason: string;
 }
 
+export interface CalendarEvent {
+  date: string; // YYYY-MM-DD
+  title: string;
+  startTime: string; // HH:MM
+  endTime: string; // HH:MM
+  durationMinutes: number;
+  attendees: string[];
+  description?: string;
+}
+
+export interface CalendarTaskMatch {
+  event: CalendarEvent;
+  issueKey: string | null;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+}
+
 export interface JiraProject {
   key: string;
   name: string;
@@ -365,7 +382,10 @@ export class TempoClient {
 
     return this.gmailOAuth.generateAuthUrl({
       access_type: "offline",
-      scope: ["https://www.googleapis.com/auth/gmail.readonly"],
+      scope: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ],
       prompt: "consent",
     });
   }
@@ -504,6 +524,153 @@ export class TempoClient {
     }
 
     return emails;
+  }
+
+  /**
+   * Fetch calendar events from Google Calendar for a date range
+   * Only includes events where user is attending (accepted or tentative)
+   */
+  async getCalendarEvents(startDate: string, endDate: string): Promise<CalendarEvent[]> {
+    if (!this.gmailOAuth || !this.gmailOAuth.credentials?.access_token) {
+      return []; // Google OAuth not configured or not authenticated
+    }
+
+    const events: CalendarEvent[] = [];
+    const calendar = google.calendar({ version: "v3", auth: this.gmailOAuth });
+
+    try {
+      // Get events from primary calendar
+      const response = await calendar.events.list({
+        calendarId: "primary",
+        timeMin: new Date(startDate + "T00:00:00").toISOString(),
+        timeMax: new Date(endDate + "T23:59:59").toISOString(),
+        singleEvents: true,
+        orderBy: "startTime",
+        maxResults: 100,
+      });
+
+      if (response.data.items) {
+        for (const event of response.data.items) {
+          // Skip all-day events (no specific time)
+          if (!event.start?.dateTime || !event.end?.dateTime) {
+            continue;
+          }
+
+          // Skip declined events
+          const myAttendee = event.attendees?.find(a => a.self);
+          if (myAttendee?.responseStatus === "declined") {
+            continue;
+          }
+
+          const startTime = new Date(event.start.dateTime);
+          const endTime = new Date(event.end.dateTime);
+          const durationMinutes = Math.round((endTime.getTime() - startTime.getTime()) / 60000);
+
+          // Round duration to 15-min blocks (minimum 15 min)
+          const roundedDuration = Math.max(15, Math.round(durationMinutes / 15) * 15);
+
+          events.push({
+            date: startTime.toISOString().split("T")[0],
+            title: event.summary || "(No title)",
+            startTime: startTime.toTimeString().substring(0, 5), // HH:MM
+            endTime: endTime.toTimeString().substring(0, 5),
+            durationMinutes: roundedDuration,
+            attendees: (event.attendees || []).map(a => a.email || "").filter(e => e),
+            description: event.description || undefined,
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Calendar API error:", e);
+    }
+
+    return events;
+  }
+
+  /**
+   * Match calendar events to Jira issues using AI-like similarity reasoning
+   */
+  async matchCalendarEventsToJiraIssues(events: CalendarEvent[]): Promise<CalendarTaskMatch[]> {
+    const matches: CalendarTaskMatch[] = [];
+    if (events.length === 0) return matches;
+
+    // Get all sprint issues once (cached for all events)
+    const sprintIssues = await this.getAllSprintIssues();
+
+    for (const event of events) {
+      // First, check if event title contains a Jira issue key
+      const issueKeyPattern = /([A-Z][A-Z0-9]+-\d+)/g;
+      const titleMatches = event.title.match(issueKeyPattern);
+      const descMatches = event.description?.match(issueKeyPattern);
+
+      if (titleMatches && titleMatches.length > 0) {
+        matches.push({
+          event,
+          issueKey: titleMatches[0],
+          confidence: "high",
+          reason: `Issue key in title: ${titleMatches[0]}`,
+        });
+        continue;
+      }
+
+      if (descMatches && descMatches.length > 0) {
+        matches.push({
+          event,
+          issueKey: descMatches[0],
+          confidence: "medium",
+          reason: `Issue key in description: ${descMatches[0]}`,
+        });
+        continue;
+      }
+
+      // AI-like matching: find the best matching issue based on similarity
+      // Check if any attendee's email domain matches a project
+      let matchedProject: JiraProject | null = null;
+      for (const attendee of event.attendees) {
+        const domainMatch = attendee.match(/@([^.]+)/);
+        if (domainMatch) {
+          const companyName = domainMatch[1].toLowerCase();
+          matchedProject = await this.findProjectByCompany(companyName);
+          if (matchedProject) break;
+        }
+      }
+
+      // Extract keywords from event title and description
+      const eventText = event.title + ' ' + (event.description || '');
+      const eventKeywords = this.extractKeywords(eventText);
+      if (eventKeywords.length === 0) continue;
+
+      // Find best matching issue
+      let bestMatch: { key: string; score: number; reason: string } | null = null;
+
+      for (const issue of sprintIssues) {
+        // If we matched a project from attendee, prioritize issues from that project
+        const projectBonus = matchedProject && issue.project === matchedProject.key ? 0.3 : 0;
+
+        const issueKeywords = this.extractKeywords(issue.summary);
+        const similarity = this.calculateSimilarity(eventKeywords, issueKeywords);
+        const totalScore = similarity + projectBonus;
+
+        if (totalScore > 0.3 && (!bestMatch || totalScore > bestMatch.score)) {
+          bestMatch = {
+            key: issue.key,
+            score: totalScore,
+            reason: `Similarity: ${(similarity * 100).toFixed(0)}%${projectBonus ? ` + attendee project match (${matchedProject?.name})` : ''} → "${issue.summary.substring(0, 50)}"`,
+          };
+        }
+      }
+
+      if (bestMatch) {
+        matches.push({
+          event,
+          issueKey: bestMatch.key,
+          confidence: bestMatch.score > 0.5 ? "high" : "medium",
+          reason: bestMatch.reason,
+        });
+      }
+    }
+
+    return matches;
   }
 
   /**
@@ -1114,6 +1281,25 @@ export class TempoClient {
       // Gmail not configured or error, continue without emails
     }
 
+    // Fetch and match calendar events (if Google OAuth is configured)
+    const calendarTasksByDate = new Map<string, CalendarTaskMatch[]>();
+    try {
+      const events = await this.getCalendarEvents(weekStart, weekEnd);
+      if (events.length > 0) {
+        const matches = await this.matchCalendarEventsToJiraIssues(events);
+        // Group by date and filter to only those with matched issues
+        for (const match of matches) {
+          if (match.issueKey && match.confidence !== "low") {
+            const existing = calendarTasksByDate.get(match.event.date) || [];
+            existing.push(match);
+            calendarTasksByDate.set(match.event.date, existing);
+          }
+        }
+      }
+    } catch {
+      // Calendar not configured or error, continue without calendar events
+    }
+
     // Process each day
     for (const { date, dayOfWeek } of workDates) {
       const dayCommits = commitsByDate.get(date) || [];
@@ -1253,7 +1439,7 @@ export class TempoClient {
         }
       }
 
-      // Add email-based tasks (0.25h each, marked with 📧)
+      // Add email-based tasks (0.25h each)
       const dayEmailTasks = emailTasksByDate.get(date) || [];
       const addedEmailIssues = new Set<string>();
       for (const emailTask of dayEmailTasks) {
@@ -1270,6 +1456,31 @@ export class TempoClient {
             timesheetDay.totalHours += 0.25;
             addedEmailIssues.add(emailTask.issueKey);
           }
+        }
+      }
+
+      // Add calendar meeting tasks (using actual meeting duration)
+      const dayCalendarTasks = calendarTasksByDate.get(date) || [];
+      const addedCalendarIssues = new Set<string>();
+      for (const calTask of dayCalendarTasks) {
+        if (calTask.issueKey && !addedCalendarIssues.has(calTask.issueKey)) {
+          // Check if this issue is already in entries from commits or emails
+          const existingEntry = timesheetDay.entries.find(e => e.issueKey === calTask.issueKey);
+          if (existingEntry) {
+            // Add meeting time to existing entry
+            existingEntry.hours += calTask.event.durationMinutes / 60;
+            existingEntry.description += ` + Meeting: ${calTask.event.title}`;
+          } else {
+            // Create new entry for meeting
+            timesheetDay.entries.push({
+              issueKey: calTask.issueKey,
+              hours: calTask.event.durationMinutes / 60,
+              description: `Meeting - ${calTask.event.title}`,
+              project: calTask.issueKey.split("-")[0],
+            });
+          }
+          timesheetDay.totalHours += calTask.event.durationMinutes / 60;
+          addedCalendarIssues.add(calTask.issueKey);
         }
       }
 
