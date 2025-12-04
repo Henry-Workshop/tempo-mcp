@@ -579,21 +579,42 @@ export class TempoClient {
   }
 
   /**
-   * Search for Jira issues in a project matching search terms
+   * Search for Jira issues in a project's current sprint matching search terms
+   * Prioritizes: 1) current sprint, 2) recent issues (30 days)
    */
   private async searchIssuesInProject(projectKey: string, searchTerms: string): Promise<string | null> {
+    // First: try to find in current sprint (most relevant for timesheet)
     try {
-      const jql = encodeURIComponent(`project = ${projectKey} AND text ~ "${searchTerms}" ORDER BY updated DESC`);
-      const response = await this.jiraRequest<{ issues: Array<{ key: string; fields: { summary: string } }> }>(
-        `/rest/api/3/search/jql?jql=${jql}&maxResults=1&fields=summary`
+      const sprintJql = encodeURIComponent(
+        `project = ${projectKey} AND sprint in openSprints() AND text ~ "${searchTerms}" ORDER BY updated DESC`
+      );
+      const sprintResponse = await this.jiraRequest<{ issues: Array<{ key: string; fields: { summary: string } }> }>(
+        `/rest/api/3/search/jql?jql=${sprintJql}&maxResults=1&fields=summary`
       );
 
-      if (response.issues && response.issues.length > 0) {
-        return response.issues[0].key;
+      if (sprintResponse.issues && sprintResponse.issues.length > 0) {
+        return sprintResponse.issues[0].key;
+      }
+    } catch {
+      // Sprint search failed, try without sprint filter
+    }
+
+    // Second: try recent issues in project (last 30 days)
+    try {
+      const recentJql = encodeURIComponent(
+        `project = ${projectKey} AND updated >= -30d AND text ~ "${searchTerms}" ORDER BY updated DESC`
+      );
+      const recentResponse = await this.jiraRequest<{ issues: Array<{ key: string; fields: { summary: string } }> }>(
+        `/rest/api/3/search/jql?jql=${recentJql}&maxResults=1&fields=summary`
+      );
+
+      if (recentResponse.issues && recentResponse.issues.length > 0) {
+        return recentResponse.issues[0].key;
       }
     } catch {
       // Search failed
     }
+
     return null;
   }
 

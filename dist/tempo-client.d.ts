@@ -173,7 +173,8 @@ export declare class TempoClient {
      */
     private findProjectByCompany;
     /**
-     * Search for Jira issues in a project matching search terms
+     * Search for Jira issues in a project's current sprint matching search terms
+     * Prioritizes: 1) current sprint, 2) recent issues (30 days)
      */
     private searchIssuesInProject;
     /**
