@@ -1429,7 +1429,7 @@ export class TempoClient {
       const dayCalendarEvents = await this.getCalendarEvents(date, date);
       for (const event of dayCalendarEvents) {
         const titleLower = event.title.toLowerCase();
-        const isSprintMeeting = /daily|standup|stand-up|sprint|planning|retro|refinement|grooming|sync|réunion|bamboo|infusion/.test(titleLower);
+        const isSprintMeeting = /daily|standup|stand-up|sprint|planning|retro|review|refinement|grooming|sync|réunion|rencontre|bamboo|infusion|global/.test(titleLower);
         if (!isSprintMeeting) continue;
 
         // Detect project from title or attendees
