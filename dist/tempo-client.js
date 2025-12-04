@@ -960,20 +960,16 @@ class TempoClient {
         }).filter(m => m.length > 0);
         if (cleanMessages.length === 0)
             return "Développement";
-        // Categorize work based on keywords
-        const allText = cleanMessages.join(" ").toLowerCase();
-        const types = [];
-        if (/correctif|fix|bug|corrig|patch/.test(allText))
-            types.push("Correctifs");
-        if (/design|ui|ux|interface|layout|style/.test(allText))
-            types.push("Design");
-        if (/refactor|clean|optim|amélio|improve/.test(allText))
-            types.push("Optimisation");
-        if (/add|ajout|nouveau|new|implement|créa|feature/.test(allText))
-            types.push("Développement");
-        if (/remove|suppr|delete|retir/.test(allText))
-            types.push("Nettoyage");
-        return types.length > 0 ? types.slice(0, 2).join(" et ") : "Développement";
+        // Get unique summaries (first 60 chars of each, deduplicated)
+        const uniqueSummaries = [...new Set(cleanMessages.map(m => {
+                // Capitalize first letter, truncate if needed
+                const summary = m.charAt(0).toUpperCase() + m.slice(1);
+                return summary.length > 60 ? summary.substring(0, 57) + "..." : summary;
+            }))];
+        // Take up to 3 summaries, join with " | "
+        const description = uniqueSummaries.slice(0, 3).join(" | ");
+        // Truncate total to 150 chars max
+        return description.length > 150 ? description.substring(0, 147) + "..." : description;
     }
     /**
      * Simplify email subject into client-friendly description
