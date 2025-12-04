@@ -14,9 +14,9 @@ const JIRA_ACCOUNT_FIELD_ID = process.env.JIRA_ACCOUNT_FIELD_ID || "10026";
 const DEFAULT_ROLE = process.env.DEFAULT_ROLE || "Dev";
 const DEFAULT_PROJECTS_DIR = process.env.DEFAULT_PROJECTS_DIR || "";
 const DEFAULT_MONDAY_MEETING_ISSUE = process.env.DEFAULT_MONDAY_MEETING_ISSUE || "BS-14";
-// Gmail IMAP (optional - for email-based task detection)
-const GMAIL_USER = process.env.GMAIL_USER || "";
-const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || "";
+// Gmail OAuth (optional - for email-based task detection)
+const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID || "";
+const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET || "";
 if (!TEMPO_API_TOKEN || !JIRA_API_TOKEN || !JIRA_EMAIL || !JIRA_BASE_URL) {
     console.error("Missing required environment variables:");
     console.error("  TEMPO_API_TOKEN - Tempo API token");
@@ -24,8 +24,8 @@ if (!TEMPO_API_TOKEN || !JIRA_API_TOKEN || !JIRA_EMAIL || !JIRA_BASE_URL) {
     console.error("  JIRA_EMAIL - Jira account email");
     console.error("  JIRA_BASE_URL - Jira base URL (e.g., https://company.atlassian.net)");
     console.error("\nOptional (for email integration):");
-    console.error("  GMAIL_USER - Gmail email address");
-    console.error("  GMAIL_APP_PASSWORD - Gmail app password (from Google Account > Security > App passwords)");
+    console.error("  GMAIL_CLIENT_ID - Google OAuth Client ID");
+    console.error("  GMAIL_CLIENT_SECRET - Google OAuth Client Secret");
     process.exit(1);
 }
 const tempoClient = new tempo_client_js_1.TempoClient({
@@ -35,8 +35,8 @@ const tempoClient = new tempo_client_js_1.TempoClient({
     jiraBaseUrl: JIRA_BASE_URL,
     accountFieldId: JIRA_ACCOUNT_FIELD_ID,
     defaultRole: DEFAULT_ROLE,
-    gmailUser: GMAIL_USER || undefined,
-    gmailAppPassword: GMAIL_APP_PASSWORD || undefined,
+    gmailClientId: GMAIL_CLIENT_ID || undefined,
+    gmailClientSecret: GMAIL_CLIENT_SECRET || undefined,
 });
 const server = new index_js_1.Server({
     name: "tempo-mcp",
@@ -241,6 +241,22 @@ server.setRequestHandler(types_js_1.ListToolsRequestSchema, async () => {
                     required: ["weekStart"],
                 },
             },
+            {
+                name: "tempo_gmail_auth",
+                description: "Authenticate with Gmail to enable email-based task detection. Opens a browser window for OAuth authorization. Only needs to be done once.",
+                inputSchema: {
+                    type: "object",
+                    properties: {},
+                },
+            },
+            {
+                name: "tempo_gmail_status",
+                description: "Check if Gmail is configured and authenticated.",
+                inputSchema: {
+                    type: "object",
+                    properties: {},
+                },
+            },
         ],
     };
 });
@@ -402,6 +418,63 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                         {
                             type: "text",
                             text: output,
+                        },
+                    ],
+                };
+            }
+            case "tempo_gmail_auth": {
+                const authUrl = tempoClient.getGmailAuthUrl();
+                if (!authUrl) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: "❌ Gmail OAuth not configured. Set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET environment variables.",
+                            },
+                        ],
+                    };
+                }
+                // Start auth flow
+                try {
+                    await tempoClient.authenticateGmail();
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: "✅ Gmail authentication successful! Email-based task detection is now enabled.",
+                            },
+                        ],
+                    };
+                }
+                catch (e) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `❌ Gmail authentication failed: ${e}\n\nPlease open this URL manually:\n${authUrl}`,
+                            },
+                        ],
+                    };
+                }
+            }
+            case "tempo_gmail_status": {
+                const isConfigured = tempoClient.isGmailConfigured();
+                const hasCredentials = GMAIL_CLIENT_ID && GMAIL_CLIENT_SECRET;
+                let status = "";
+                if (!hasCredentials) {
+                    status = "❌ Gmail not configured (GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET not set)";
+                }
+                else if (!isConfigured) {
+                    status = "⚠️ Gmail configured but not authenticated. Run tempo_gmail_auth to connect.";
+                }
+                else {
+                    status = "✅ Gmail connected and ready for email-based task detection.";
+                }
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: status,
                         },
                     ],
                 };

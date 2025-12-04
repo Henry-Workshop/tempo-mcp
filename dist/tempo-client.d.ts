@@ -105,8 +105,8 @@ export declare class TempoClient {
     private defaultRole;
     private roleAttributeKey;
     private accountAttributeKey;
-    private gmailUser;
-    private gmailAppPassword;
+    private gmailOAuth;
+    private gmailTokenPath;
     constructor(config: {
         tempoToken: string;
         jiraToken: string;
@@ -114,8 +114,9 @@ export declare class TempoClient {
         jiraBaseUrl: string;
         accountFieldId?: string;
         defaultRole?: string;
-        gmailUser?: string;
-        gmailAppPassword?: string;
+        gmailClientId?: string;
+        gmailClientSecret?: string;
+        gmailTokenPath?: string;
     });
     private tempoRequest;
     private jiraRequest;
@@ -138,7 +139,19 @@ export declare class TempoClient {
     findSprintMeetingsIssue(projectKey: string): Promise<string | null>;
     findActiveProjectAccount(projectKey: string, excludeAccount?: string): Promise<string | null>;
     /**
-     * Fetch emails from Gmail via IMAP for a date range
+     * Check if Gmail OAuth is configured and authenticated
+     */
+    isGmailConfigured(): boolean;
+    /**
+     * Get Gmail OAuth URL for user to authorize
+     */
+    getGmailAuthUrl(): string | null;
+    /**
+     * Authenticate Gmail via OAuth - starts local server to receive callback
+     */
+    authenticateGmail(): Promise<boolean>;
+    /**
+     * Fetch emails from Gmail via API for a date range
      */
     getEmails(startDate: string, endDate: string): Promise<EmailMessage[]>;
     /**

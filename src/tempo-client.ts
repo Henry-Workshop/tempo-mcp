@@ -1,8 +1,10 @@
 import { execSync } from "child_process";
-import { readdirSync, statSync, existsSync } from "fs";
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import Imap from "imap";
-import { simpleParser, ParsedMail } from "mailparser";
+import { google } from "googleapis";
+import { OAuth2Client } from "google-auth-library";
+import * as http from "http";
+import * as url from "url";
 
 const TEMPO_API_BASE = "https://api.tempo.io/4";
 
@@ -125,8 +127,8 @@ export class TempoClient {
   private defaultRole: string;
   private roleAttributeKey: string | null = null;
   private accountAttributeKey: string | null = null;
-  private gmailUser: string | null = null;
-  private gmailAppPassword: string | null = null;
+  private gmailOAuth: OAuth2Client | null = null;
+  private gmailTokenPath: string | null = null;
 
   constructor(config: {
     tempoToken: string;
@@ -135,8 +137,9 @@ export class TempoClient {
     jiraBaseUrl: string;
     accountFieldId?: string;
     defaultRole?: string;
-    gmailUser?: string;
-    gmailAppPassword?: string;
+    gmailClientId?: string;
+    gmailClientSecret?: string;
+    gmailTokenPath?: string;
   }) {
     this.tempoToken = config.tempoToken;
     this.jiraToken = config.jiraToken;
@@ -144,8 +147,26 @@ export class TempoClient {
     this.jiraBaseUrl = config.jiraBaseUrl.replace(/\/$/, "");
     this.accountFieldId = config.accountFieldId || "10026";
     this.defaultRole = config.defaultRole || "Dev";
-    this.gmailUser = config.gmailUser || null;
-    this.gmailAppPassword = config.gmailAppPassword || null;
+
+    // Setup Gmail OAuth if credentials provided
+    if (config.gmailClientId && config.gmailClientSecret) {
+      this.gmailOAuth = new google.auth.OAuth2(
+        config.gmailClientId,
+        config.gmailClientSecret,
+        "http://localhost:3000/oauth2callback"
+      );
+      this.gmailTokenPath = config.gmailTokenPath || join(process.env.HOME || process.env.USERPROFILE || ".", ".tempo-gmail-token.json");
+
+      // Load existing token if available
+      if (existsSync(this.gmailTokenPath)) {
+        try {
+          const token = JSON.parse(readFileSync(this.gmailTokenPath, "utf8"));
+          this.gmailOAuth.setCredentials(token);
+        } catch {
+          // Token file invalid, will need to re-auth
+        }
+      }
+    }
   }
 
   private async tempoRequest<T>(
@@ -323,108 +344,156 @@ export class TempoClient {
   }
 
   /**
-   * Fetch emails from Gmail via IMAP for a date range
+   * Check if Gmail OAuth is configured and authenticated
    */
-  async getEmails(startDate: string, endDate: string): Promise<EmailMessage[]> {
-    if (!this.gmailUser || !this.gmailAppPassword) {
-      return []; // Gmail not configured
+  isGmailConfigured(): boolean {
+    return this.gmailOAuth !== null && this.gmailOAuth.credentials?.access_token !== undefined;
+  }
+
+  /**
+   * Get Gmail OAuth URL for user to authorize
+   */
+  getGmailAuthUrl(): string | null {
+    if (!this.gmailOAuth) return null;
+
+    return this.gmailOAuth.generateAuthUrl({
+      access_type: "offline",
+      scope: ["https://www.googleapis.com/auth/gmail.readonly"],
+      prompt: "consent",
+    });
+  }
+
+  /**
+   * Authenticate Gmail via OAuth - starts local server to receive callback
+   */
+  async authenticateGmail(): Promise<boolean> {
+    if (!this.gmailOAuth) {
+      throw new Error("Gmail OAuth not configured. Set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET.");
     }
 
     return new Promise((resolve, reject) => {
-      const emails: EmailMessage[] = [];
+      const server = http.createServer(async (req, res) => {
+        try {
+          const reqUrl = new url.URL(req.url!, `http://localhost:3000`);
+          if (reqUrl.pathname === "/oauth2callback") {
+            const code = reqUrl.searchParams.get("code");
+            if (code) {
+              const { tokens } = await this.gmailOAuth!.getToken(code);
+              this.gmailOAuth!.setCredentials(tokens);
 
-      const imap = new Imap({
-        user: this.gmailUser!,
-        password: this.gmailAppPassword!,
-        host: "imap.gmail.com",
-        port: 993,
-        tls: true,
-        tlsOptions: { rejectUnauthorized: false },
-      });
-
-      const fetchEmails = (boxName: string, isSent: boolean): Promise<EmailMessage[]> => {
-        return new Promise((resolveBox, rejectBox) => {
-          imap.openBox(boxName, true, (err, box) => {
-            if (err) {
-              resolveBox([]); // Box might not exist
-              return;
-            }
-
-            // Search for emails in date range
-            const searchCriteria = [
-              ["SINCE", startDate],
-              ["BEFORE", new Date(new Date(endDate).getTime() + 86400000).toISOString().split("T")[0]],
-            ];
-
-            imap.search(searchCriteria, (err, uids) => {
-              if (err || !uids || uids.length === 0) {
-                resolveBox([]);
-                return;
+              // Save token for future use
+              if (this.gmailTokenPath) {
+                writeFileSync(this.gmailTokenPath, JSON.stringify(tokens));
               }
 
-              const boxEmails: EmailMessage[] = [];
-              const fetch = imap.fetch(uids, { bodies: "", struct: true });
-
-              fetch.on("message", (msg) => {
-                msg.on("body", (stream) => {
-                  let buffer = "";
-                  stream.on("data", (chunk) => {
-                    buffer += chunk.toString("utf8");
-                  });
-                  stream.once("end", async () => {
-                    try {
-                      const parsed = await simpleParser(buffer);
-                      const emailDate = parsed.date
-                        ? parsed.date.toISOString().split("T")[0]
-                        : startDate;
-
-                      // Extract text snippet
-                      let snippet = "";
-                      if (parsed.text) {
-                        snippet = parsed.text.substring(0, 300).replace(/\s+/g, " ").trim();
-                      }
-
-                      boxEmails.push({
-                        date: emailDate,
-                        subject: parsed.subject || "(No subject)",
-                        from: parsed.from?.text || "",
-                        to: parsed.to ? (Array.isArray(parsed.to) ? parsed.to.map((t) => t.text) : [parsed.to.text]) : [],
-                        snippet,
-                        isSent,
-                      });
-                    } catch {
-                      // Skip unparseable emails
-                    }
-                  });
-                });
-              });
-
-              fetch.once("error", () => resolveBox([]));
-              fetch.once("end", () => resolveBox(boxEmails));
-            });
-          });
-        });
-      };
-
-      imap.once("ready", async () => {
-        try {
-          // Fetch from INBOX (received) and [Gmail]/Sent Mail (sent)
-          const received = await fetchEmails("INBOX", false);
-          const sent = await fetchEmails("[Gmail]/Sent Mail", true);
-          emails.push(...received, ...sent);
-          imap.end();
-          resolve(emails);
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end("<h1>Authentication successful!</h1><p>You can close this window.</p>");
+              server.close();
+              resolve(true);
+            } else {
+              res.writeHead(400, { "Content-Type": "text/html" });
+              res.end("<h1>Authentication failed</h1><p>No code received.</p>");
+              server.close();
+              resolve(false);
+            }
+          }
         } catch (e) {
-          imap.end();
-          resolve([]);
+          res.writeHead(500, { "Content-Type": "text/html" });
+          res.end(`<h1>Error</h1><p>${e}</p>`);
+          server.close();
+          reject(e);
         }
       });
 
-      imap.once("error", () => resolve([]));
-      imap.once("end", () => {});
+      server.listen(3000, () => {
+        const authUrl = this.getGmailAuthUrl();
+        console.log(`\n🔐 Open this URL in your browser to authorize Gmail:\n\n${authUrl}\n`);
+      });
 
-      imap.connect();
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        server.close();
+        reject(new Error("Authentication timeout"));
+      }, 300000);
     });
+  }
+
+  /**
+   * Fetch emails from Gmail via API for a date range
+   */
+  async getEmails(startDate: string, endDate: string): Promise<EmailMessage[]> {
+    if (!this.gmailOAuth || !this.gmailOAuth.credentials?.access_token) {
+      return []; // Gmail not configured or not authenticated
+    }
+
+    const emails: EmailMessage[] = [];
+    const gmail = google.gmail({ version: "v1", auth: this.gmailOAuth });
+
+    try {
+      // Format dates for Gmail query (YYYY/MM/DD)
+      const afterDate = startDate.replace(/-/g, "/");
+      const beforeDate = new Date(new Date(endDate).getTime() + 86400000).toISOString().split("T")[0].replace(/-/g, "/");
+
+      // Search for emails in date range (both sent and received)
+      const queries = [
+        `after:${afterDate} before:${beforeDate} in:inbox`,
+        `after:${afterDate} before:${beforeDate} in:sent`,
+      ];
+
+      for (const query of queries) {
+        const isSent = query.includes("in:sent");
+        const response = await gmail.users.messages.list({
+          userId: "me",
+          q: query,
+          maxResults: 100,
+        });
+
+        if (response.data.messages) {
+          for (const msg of response.data.messages) {
+            try {
+              const fullMsg = await gmail.users.messages.get({
+                userId: "me",
+                id: msg.id!,
+                format: "full",
+              });
+
+              const headers = fullMsg.data.payload?.headers || [];
+              const getHeader = (name: string) => headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value || "";
+
+              // Parse date
+              const dateHeader = getHeader("Date");
+              let emailDate = startDate;
+              if (dateHeader) {
+                try {
+                  emailDate = new Date(dateHeader).toISOString().split("T")[0];
+                } catch {
+                  // Keep default
+                }
+              }
+
+              // Get snippet
+              const snippet = fullMsg.data.snippet || "";
+
+              emails.push({
+                date: emailDate,
+                subject: getHeader("Subject") || "(No subject)",
+                from: getHeader("From"),
+                to: getHeader("To").split(",").map((t) => t.trim()),
+                snippet: snippet.substring(0, 300),
+                isSent,
+              });
+            } catch {
+              // Skip individual message errors
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Gmail API error, return empty
+      console.error("Gmail API error:", e);
+    }
+
+    return emails;
   }
 
   /**
