@@ -1217,7 +1217,32 @@ export class TempoClient {
   /**
    * Generate a client-friendly description from commit messages
    */
-  private translateToFrench(text: string): string {
+  private simplifyTechnical(text: string): string {
+    let result = text
+      // Remove technical suffixes/details
+      .replace(/\s*(dans|in|from|to)\s*(la\s*)?(bd|db|database|base de données)\b/gi, "")
+      .replace(/\s*taille\s*(dans|de)?\s*/gi, " ")
+      .replace(/\s*size\s*(in|of)?\s*/gi, " ")
+      // Simplify camelCase/snake_case to readable words
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .replace(/_/g, " ")
+      // Remove overly technical terms
+      .replace(/\b(workorder|order)\s*references?\b/gi, "commandes")
+      .replace(/\binvoice\b/gi, "facture")
+      .replace(/\bapi\b/gi, "")
+      .replace(/\bauth0?\b/gi, "authentification")
+      .replace(/\b(staging|prod|production)\b/gi, "")
+      .replace(/\b(component|module|class|function|method)\b/gi, "")
+      .replace(/\b(endpoint|route|controller)\b/gi, "")
+      .replace(/\b(field|column|table|row)\b/gi, "")
+      .replace(/\bglobaux\b/gi, "généraux")
+      // Clean up extra spaces
+      .replace(/\s+/g, " ")
+      .trim();
+    return result;
+  }
+
+    private translateToFrench(text: string): string {
     const translations: [RegExp, string][] = [
       [/\bfix(ed|ing|es)?\b/gi, "Correctif"],
       [/\badd(ed|ing|s)?\b/gi, "Ajout"],
@@ -1269,7 +1294,8 @@ export class TempoClient {
 
     // Get unique summaries, translate to French
     const uniqueSummaries = [...new Set(cleanMessages.map(m => {
-      const translated = this.translateToFrench(m);
+      const simplified = this.simplifyTechnical(m);
+      const translated = this.translateToFrench(simplified);
       const summary = translated.charAt(0).toUpperCase() + translated.slice(1);
       return summary.length > 60 ? summary.substring(0, 57) + "..." : summary;
     }))];

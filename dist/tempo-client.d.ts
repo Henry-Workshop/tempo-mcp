@@ -236,6 +236,7 @@ export declare class TempoClient {
     /**
      * Generate a client-friendly description from commit messages
      */
+    private simplifyTechnical;
     private translateToFrench;
     private generateDescription;
     /**
