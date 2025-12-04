@@ -9,7 +9,9 @@
       "Bash(git push)",
       "mcp__tempo-mcp__tempo_generate_timesheet",
       "Bash(git commit -m \"$(cat <<''EOF''\nfix: use %ad with --date=short for Windows git compatibility\n\nThe %Y-%m-%d format in git pretty-format doesn''t work on Windows,\noutputting literal %Y->- instead of dates. Using %ad with --date=short\nprovides the same YYYY-MM-DD format and works cross-platform.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "WebSearch",
+      "Bash(npm install:*)"
     ],
     "deny": [],
     "ask": []

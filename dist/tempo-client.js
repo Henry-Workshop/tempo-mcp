@@ -1,9 +1,14 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TempoClient = void 0;
 const child_process_1 = require("child_process");
 const fs_1 = require("fs");
 const path_1 = require("path");
+const imap_1 = __importDefault(require("imap"));
+const mailparser_1 = require("mailparser");
 const TEMPO_API_BASE = "https://api.tempo.io/4";
 class TempoClient {
     tempoToken;
@@ -14,6 +19,8 @@ class TempoClient {
     defaultRole;
     roleAttributeKey = null;
     accountAttributeKey = null;
+    gmailUser = null;
+    gmailAppPassword = null;
     constructor(config) {
         this.tempoToken = config.tempoToken;
         this.jiraToken = config.jiraToken;
@@ -21,6 +28,8 @@ class TempoClient {
         this.jiraBaseUrl = config.jiraBaseUrl.replace(/\/$/, "");
         this.accountFieldId = config.accountFieldId || "10026";
         this.defaultRole = config.defaultRole || "Dev";
+        this.gmailUser = config.gmailUser || null;
+        this.gmailAppPassword = config.gmailAppPassword || null;
     }
     async tempoRequest(endpoint, options = {}) {
         const response = await fetch(`${TEMPO_API_BASE}${endpoint}`, {
@@ -158,6 +167,157 @@ class TempoClient {
             }
         }
         return null;
+    }
+    /**
+     * Fetch emails from Gmail via IMAP for a date range
+     */
+    async getEmails(startDate, endDate) {
+        if (!this.gmailUser || !this.gmailAppPassword) {
+            return []; // Gmail not configured
+        }
+        return new Promise((resolve, reject) => {
+            const emails = [];
+            const imap = new imap_1.default({
+                user: this.gmailUser,
+                password: this.gmailAppPassword,
+                host: "imap.gmail.com",
+                port: 993,
+                tls: true,
+                tlsOptions: { rejectUnauthorized: false },
+            });
+            const fetchEmails = (boxName, isSent) => {
+                return new Promise((resolveBox, rejectBox) => {
+                    imap.openBox(boxName, true, (err, box) => {
+                        if (err) {
+                            resolveBox([]); // Box might not exist
+                            return;
+                        }
+                        // Search for emails in date range
+                        const searchCriteria = [
+                            ["SINCE", startDate],
+                            ["BEFORE", new Date(new Date(endDate).getTime() + 86400000).toISOString().split("T")[0]],
+                        ];
+                        imap.search(searchCriteria, (err, uids) => {
+                            if (err || !uids || uids.length === 0) {
+                                resolveBox([]);
+                                return;
+                            }
+                            const boxEmails = [];
+                            const fetch = imap.fetch(uids, { bodies: "", struct: true });
+                            fetch.on("message", (msg) => {
+                                msg.on("body", (stream) => {
+                                    let buffer = "";
+                                    stream.on("data", (chunk) => {
+                                        buffer += chunk.toString("utf8");
+                                    });
+                                    stream.once("end", async () => {
+                                        try {
+                                            const parsed = await (0, mailparser_1.simpleParser)(buffer);
+                                            const emailDate = parsed.date
+                                                ? parsed.date.toISOString().split("T")[0]
+                                                : startDate;
+                                            // Extract text snippet
+                                            let snippet = "";
+                                            if (parsed.text) {
+                                                snippet = parsed.text.substring(0, 300).replace(/\s+/g, " ").trim();
+                                            }
+                                            boxEmails.push({
+                                                date: emailDate,
+                                                subject: parsed.subject || "(No subject)",
+                                                from: parsed.from?.text || "",
+                                                to: parsed.to ? (Array.isArray(parsed.to) ? parsed.to.map((t) => t.text) : [parsed.to.text]) : [],
+                                                snippet,
+                                                isSent,
+                                            });
+                                        }
+                                        catch {
+                                            // Skip unparseable emails
+                                        }
+                                    });
+                                });
+                            });
+                            fetch.once("error", () => resolveBox([]));
+                            fetch.once("end", () => resolveBox(boxEmails));
+                        });
+                    });
+                });
+            };
+            imap.once("ready", async () => {
+                try {
+                    // Fetch from INBOX (received) and [Gmail]/Sent Mail (sent)
+                    const received = await fetchEmails("INBOX", false);
+                    const sent = await fetchEmails("[Gmail]/Sent Mail", true);
+                    emails.push(...received, ...sent);
+                    imap.end();
+                    resolve(emails);
+                }
+                catch (e) {
+                    imap.end();
+                    resolve([]);
+                }
+            });
+            imap.once("error", () => resolve([]));
+            imap.once("end", () => { });
+            imap.connect();
+        });
+    }
+    /**
+     * Match emails to Jira issues by searching for keywords
+     */
+    async matchEmailsToJiraIssues(emails) {
+        const matches = [];
+        for (const email of emails) {
+            // First, check if email subject/body contains a Jira issue key
+            const issueKeyPattern = /([A-Z][A-Z0-9]+-\d+)/g;
+            const subjectMatches = email.subject.match(issueKeyPattern);
+            const bodyMatches = email.snippet.match(issueKeyPattern);
+            if (subjectMatches && subjectMatches.length > 0) {
+                matches.push({
+                    email,
+                    issueKey: subjectMatches[0],
+                    confidence: "high",
+                    reason: `Issue key found in subject: ${subjectMatches[0]}`,
+                });
+                continue;
+            }
+            if (bodyMatches && bodyMatches.length > 0) {
+                matches.push({
+                    email,
+                    issueKey: bodyMatches[0],
+                    confidence: "medium",
+                    reason: `Issue key found in body: ${bodyMatches[0]}`,
+                });
+                continue;
+            }
+            // Search Jira for matching issues based on email content
+            const searchTerms = email.subject.split(/\s+/).filter((w) => w.length > 3).slice(0, 3).join(" ");
+            if (searchTerms) {
+                try {
+                    const jql = encodeURIComponent(`text ~ "${searchTerms}" ORDER BY updated DESC`);
+                    const response = await this.jiraRequest(`/rest/api/3/search/jql?jql=${jql}&maxResults=1&fields=summary`);
+                    if (response.issues && response.issues.length > 0) {
+                        matches.push({
+                            email,
+                            issueKey: response.issues[0].key,
+                            confidence: "low",
+                            reason: `Jira search match: ${response.issues[0].fields.summary}`,
+                        });
+                        continue;
+                    }
+                }
+                catch {
+                    // Jira search failed, skip
+                }
+            }
+            // No match found
+            matches.push({
+                email,
+                issueKey: null,
+                confidence: "low",
+                reason: "No matching Jira issue found",
+            });
+        }
+        return matches;
     }
     async createWorklog(params) {
         await this.initialize();
@@ -420,6 +580,25 @@ class TempoClient {
             existing.push(commit);
             commitsByDate.set(commit.date, existing);
         }
+        // Fetch and match emails (if Gmail is configured)
+        const emailTasksByDate = new Map();
+        try {
+            const emails = await this.getEmails(weekStart, weekEnd);
+            if (emails.length > 0) {
+                const matches = await this.matchEmailsToJiraIssues(emails);
+                // Group by date and filter to only those with matched issues
+                for (const match of matches) {
+                    if (match.issueKey && match.confidence !== "low") {
+                        const existing = emailTasksByDate.get(match.email.date) || [];
+                        existing.push(match);
+                        emailTasksByDate.set(match.email.date, existing);
+                    }
+                }
+            }
+        }
+        catch {
+            // Gmail not configured or error, continue without emails
+        }
         // Process each day
         for (const { date, dayOfWeek } of workDates) {
             const dayCommits = commitsByDate.get(date) || [];
@@ -536,6 +715,27 @@ class TempoClient {
                         project: mondayMeetingIssue.split("-")[0],
                     });
                     timesheetDay.totalHours += 0.25;
+                }
+            }
+            // Add email-based tasks (0.25h each, marked with 📧)
+            const dayEmailTasks = emailTasksByDate.get(date) || [];
+            const addedEmailIssues = new Set();
+            for (const emailTask of dayEmailTasks) {
+                if (emailTask.issueKey && !addedEmailIssues.has(emailTask.issueKey)) {
+                    // Check if this issue is already in entries from commits
+                    const existingEntry = timesheetDay.entries.find(e => e.issueKey === emailTask.issueKey);
+                    if (!existingEntry) {
+                        // Fetch issue details for description
+                        const details = await this.getIssueDetails(emailTask.issueKey);
+                        timesheetDay.entries.push({
+                            issueKey: emailTask.issueKey,
+                            hours: 0.25, // Minimum 15 min for email tasks
+                            description: `📧 ${details?.summary || emailTask.email.subject}`,
+                            project: emailTask.issueKey.split("-")[0],
+                        });
+                        timesheetDay.totalHours += 0.25;
+                        addedEmailIssues.add(emailTask.issueKey);
+                    }
                 }
             }
             // Normalize to exactly 8 hours in 15-min blocks

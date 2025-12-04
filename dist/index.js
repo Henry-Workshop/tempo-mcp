@@ -14,12 +14,18 @@ const JIRA_ACCOUNT_FIELD_ID = process.env.JIRA_ACCOUNT_FIELD_ID || "10026";
 const DEFAULT_ROLE = process.env.DEFAULT_ROLE || "Dev";
 const DEFAULT_PROJECTS_DIR = process.env.DEFAULT_PROJECTS_DIR || "";
 const DEFAULT_MONDAY_MEETING_ISSUE = process.env.DEFAULT_MONDAY_MEETING_ISSUE || "BS-14";
+// Gmail IMAP (optional - for email-based task detection)
+const GMAIL_USER = process.env.GMAIL_USER || "";
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || "";
 if (!TEMPO_API_TOKEN || !JIRA_API_TOKEN || !JIRA_EMAIL || !JIRA_BASE_URL) {
     console.error("Missing required environment variables:");
     console.error("  TEMPO_API_TOKEN - Tempo API token");
     console.error("  JIRA_API_TOKEN - Jira API token");
     console.error("  JIRA_EMAIL - Jira account email");
     console.error("  JIRA_BASE_URL - Jira base URL (e.g., https://company.atlassian.net)");
+    console.error("\nOptional (for email integration):");
+    console.error("  GMAIL_USER - Gmail email address");
+    console.error("  GMAIL_APP_PASSWORD - Gmail app password (from Google Account > Security > App passwords)");
     process.exit(1);
 }
 const tempoClient = new tempo_client_js_1.TempoClient({
@@ -29,6 +35,8 @@ const tempoClient = new tempo_client_js_1.TempoClient({
     jiraBaseUrl: JIRA_BASE_URL,
     accountFieldId: JIRA_ACCOUNT_FIELD_ID,
     defaultRole: DEFAULT_ROLE,
+    gmailUser: GMAIL_USER || undefined,
+    gmailAppPassword: GMAIL_APP_PASSWORD || undefined,
 });
 const server = new index_js_1.Server({
     name: "tempo-mcp",

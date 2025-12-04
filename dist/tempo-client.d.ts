@@ -1,3 +1,17 @@
+export interface EmailMessage {
+    date: string;
+    subject: string;
+    from: string;
+    to: string[];
+    snippet: string;
+    isSent: boolean;
+}
+export interface EmailTaskMatch {
+    email: EmailMessage;
+    issueKey: string | null;
+    confidence: "high" | "medium" | "low";
+    reason: string;
+}
 export interface TempoWorklog {
     tempoWorklogId: number;
     issue: {
@@ -91,6 +105,8 @@ export declare class TempoClient {
     private defaultRole;
     private roleAttributeKey;
     private accountAttributeKey;
+    private gmailUser;
+    private gmailAppPassword;
     constructor(config: {
         tempoToken: string;
         jiraToken: string;
@@ -98,6 +114,8 @@ export declare class TempoClient {
         jiraBaseUrl: string;
         accountFieldId?: string;
         defaultRole?: string;
+        gmailUser?: string;
+        gmailAppPassword?: string;
     });
     private tempoRequest;
     private jiraRequest;
@@ -119,6 +137,14 @@ export declare class TempoClient {
     getWorklog(worklogId: string): Promise<TempoWorklog>;
     findSprintMeetingsIssue(projectKey: string): Promise<string | null>;
     findActiveProjectAccount(projectKey: string, excludeAccount?: string): Promise<string | null>;
+    /**
+     * Fetch emails from Gmail via IMAP for a date range
+     */
+    getEmails(startDate: string, endDate: string): Promise<EmailMessage[]>;
+    /**
+     * Match emails to Jira issues by searching for keywords
+     */
+    matchEmailsToJiraIssues(emails: EmailMessage[]): Promise<EmailTaskMatch[]>;
     createWorklog(params: CreateWorklogParams): Promise<TempoWorklog>;
     updateWorklog(params: UpdateWorklogParams): Promise<TempoWorklog>;
     deleteWorklog(worklogId: string): Promise<void>;
