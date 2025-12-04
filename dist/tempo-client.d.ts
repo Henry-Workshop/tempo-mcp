@@ -127,6 +127,7 @@ export declare class TempoClient {
     private gmailOAuth;
     private gmailTokenPath;
     private cachedProjects;
+    lastCalendarDebug: string;
     constructor(config: {
         tempoToken: string;
         jiraToken: string;

@@ -153,6 +153,7 @@ export class TempoClient {
   private gmailOAuth: OAuth2Client | null = null;
   private gmailTokenPath: string | null = null;
   private cachedProjects: JiraProject[] | null = null;
+  public lastCalendarDebug: string = "";
 
   constructor(config: {
     tempoToken: string;
@@ -569,10 +570,10 @@ export class TempoClient {
       const rawCount = response.data.items?.length || 0;
       console.error(`[Calendar] API returned ${rawCount} raw events`);
 
-      if (response.data.items) {
-        let skippedAllDay = 0;
-        let skippedDeclined = 0;
+      let skippedAllDay = 0;
+      let skippedDeclined = 0;
 
+      if (response.data.items) {
         for (const event of response.data.items) {
           // Skip all-day events (no specific time)
           if (!event.start?.dateTime || !event.end?.dateTime) {
@@ -606,11 +607,13 @@ export class TempoClient {
 
           console.error(`[Calendar] Added event: "${event.summary}" on ${startTime.toISOString().split("T")[0]}`);
         }
-
-        console.error(`[Calendar] Skipped ${skippedAllDay} all-day, ${skippedDeclined} declined`);
       }
+
+      console.error(`[Calendar] Skipped ${skippedAllDay} all-day, ${skippedDeclined} declined`);
+      this.lastCalendarDebug = `raw=${rawCount},allday=${skippedAllDay},declined=${skippedDeclined},kept=${events.length}`;
     } catch (e: any) {
       console.error("[Calendar] API error:", e.message || e);
+      this.lastCalendarDebug = `error: ${e.message || e}`;
       if (e.response?.data) {
         console.error("[Calendar] Error details:", JSON.stringify(e.response.data));
       }
@@ -1461,7 +1464,7 @@ export class TempoClient {
       // Add sprint/project meetings from calendar
       const oauthStatus = !this.gmailOAuth ? "no-oauth" : !this.gmailOAuth.credentials ? "no-creds" : !this.gmailOAuth.credentials.access_token ? "no-token" : "ok";
       const dayCalendarEvents = await this.getCalendarEvents(date, date);
-      result.errors.push(`[DEBUG] ${date}: oauth=${oauthStatus}, ${dayCalendarEvents.length} events`);
+      result.errors.push(`[DEBUG] ${date}: oauth=${oauthStatus}, cal=${this.lastCalendarDebug}`);
       for (const event of dayCalendarEvents) {
         const titleLower = event.title.toLowerCase();
         const isSprintMeeting = /daily|standup|stand-up|sprint|planning|retro|review|refinement|grooming|sync|réunion|rencontre|bamboo|infusion|global/.test(titleLower);
