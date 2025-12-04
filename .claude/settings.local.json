@@ -12,7 +12,8 @@
       "Bash(git commit:*)",
       "WebSearch",
       "Bash(npm install:*)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

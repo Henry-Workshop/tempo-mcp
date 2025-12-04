@@ -1214,9 +1214,9 @@ export class TempoClient {
           // Round to 15 min blocks, minimum 0.25h (15 min) if there's any work
           const hours = Math.max(0.25, roundTo15Min(rawHours));
 
-          // Use Jira summary as description
-          const details = issueDetailsMap.get(issueKey);
-          const description = details?.summary || issueKey;
+          // Generate description from commit messages (more precise than Jira summary)
+          const commits = issueCommits.get(issueKey) || [];
+          const description = this.generateDescription(commits);
 
           timesheetDay.entries.push({
             issueKey,
@@ -1234,7 +1234,7 @@ export class TempoClient {
             timesheetDay.entries.push({
               issueKey: sprintIssue,
               hours: sprintMeetingMinutes / 60,
-              description: "Daily",
+              description: "Daily standup",
               project: mainProject,
             });
             timesheetDay.totalHours += sprintMeetingMinutes / 60;
@@ -1246,7 +1246,7 @@ export class TempoClient {
           timesheetDay.entries.push({
             issueKey: mondayMeetingIssue,
             hours: 0.25, // 15 minutes
-            description: "Weekly team sync",
+            description: "Weekly sync - weekend recap",
             project: mondayMeetingIssue.split("-")[0],
           });
           timesheetDay.totalHours += 0.25;
@@ -1261,12 +1261,10 @@ export class TempoClient {
           // Check if this issue is already in entries from commits
           const existingEntry = timesheetDay.entries.find(e => e.issueKey === emailTask.issueKey);
           if (!existingEntry) {
-            // Fetch issue details for description
-            const details = await this.getIssueDetails(emailTask.issueKey);
             timesheetDay.entries.push({
               issueKey: emailTask.issueKey,
               hours: 0.25, // Minimum 15 min for email tasks
-              description: `📧 ${details?.summary || emailTask.email.subject}`,
+              description: `Communication client - ${emailTask.email.subject}`,
               project: emailTask.issueKey.split("-")[0],
             });
             timesheetDay.totalHours += 0.25;
@@ -1292,7 +1290,7 @@ export class TempoClient {
 
         if (Math.abs(diff) >= 0.25) {
           // Find the largest non-meeting entry to adjust
-          const adjustableEntries = timesheetDay.entries.filter(e => !e.description.includes("Daily") && !e.description.includes("team sync"));
+          const adjustableEntries = timesheetDay.entries.filter(e => !e.description.includes("Daily") && !e.description.includes("Weekly sync"));
           if (adjustableEntries.length > 0) {
             const largest = adjustableEntries.reduce((a, b) => a.hours > b.hours ? a : b);
             largest.hours = Math.max(0.25, roundTo15Min(largest.hours + diff));
