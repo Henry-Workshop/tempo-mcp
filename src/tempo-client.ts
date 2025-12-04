@@ -25,6 +25,11 @@ export interface EmailTaskMatch {
   reason: string;
 }
 
+export interface JiraProject {
+  key: string;
+  name: string;
+}
+
 export interface TempoWorklog {
   tempoWorklogId: number;
   issue: {
@@ -130,6 +135,7 @@ export class TempoClient {
   private accountAttributeKey: string | null = null;
   private gmailOAuth: OAuth2Client | null = null;
   private gmailTokenPath: string | null = null;
+  private cachedProjects: JiraProject[] | null = null;
 
   constructor(config: {
     tempoToken: string;
@@ -501,12 +507,108 @@ export class TempoClient {
   }
 
   /**
-   * Match emails to Jira issues by searching for keywords
+   * Get all Jira projects (cached)
+   */
+  async getAllJiraProjects(): Promise<JiraProject[]> {
+    if (this.cachedProjects) {
+      return this.cachedProjects;
+    }
+
+    try {
+      const response = await this.jiraRequest<Array<{ key: string; name: string }>>(
+        "/rest/api/2/project"
+      );
+      this.cachedProjects = response.map(p => ({ key: p.key, name: p.name }));
+      return this.cachedProjects;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Extract company name from email recipient
+   * Handles formats like: "John Doe <john@company.com>", "john@company.com"
+   */
+  private extractCompanyFromEmail(email: EmailMessage): string | null {
+    if (!email.isSent || email.to.length === 0) {
+      return null;
+    }
+
+    // Get the first recipient
+    const recipient = email.to[0];
+
+    // Extract email address from "Name <email>" format
+    const emailMatch = recipient.match(/<([^>]+)>/) || [null, recipient];
+    const emailAddr = emailMatch[1] || recipient;
+
+    // Extract domain
+    const domainMatch = emailAddr.match(/@([^.]+)/);
+    if (!domainMatch) return null;
+
+    // Return the company name (first part of domain, lowercase)
+    return domainMatch[1].toLowerCase();
+  }
+
+  /**
+   * Find Jira project by company name using fuzzy matching
+   */
+  private async findProjectByCompany(companyName: string): Promise<JiraProject | null> {
+    const projects = await this.getAllJiraProjects();
+    const searchName = companyName.toLowerCase();
+
+    // First: exact match on project key
+    const exactKeyMatch = projects.find(p => p.key.toLowerCase() === searchName);
+    if (exactKeyMatch) return exactKeyMatch;
+
+    // Second: project name contains company name
+    const nameContains = projects.find(p => p.name.toLowerCase().includes(searchName));
+    if (nameContains) return nameContains;
+
+    // Third: company name contains project key (for abbreviations)
+    const keyInCompany = projects.find(p => searchName.includes(p.key.toLowerCase()));
+    if (keyInCompany) return keyInCompany;
+
+    // Fourth: fuzzy match - company name starts with similar letters as project
+    const fuzzyMatch = projects.find(p => {
+      const projectWords = p.name.toLowerCase().split(/\s+/);
+      return projectWords.some(word => word.startsWith(searchName.substring(0, 3)));
+    });
+    if (fuzzyMatch) return fuzzyMatch;
+
+    return null;
+  }
+
+  /**
+   * Search for Jira issues in a project matching search terms
+   */
+  private async searchIssuesInProject(projectKey: string, searchTerms: string): Promise<string | null> {
+    try {
+      const jql = encodeURIComponent(`project = ${projectKey} AND text ~ "${searchTerms}" ORDER BY updated DESC`);
+      const response = await this.jiraRequest<{ issues: Array<{ key: string; fields: { summary: string } }> }>(
+        `/rest/api/3/search/jql?jql=${jql}&maxResults=1&fields=summary`
+      );
+
+      if (response.issues && response.issues.length > 0) {
+        return response.issues[0].key;
+      }
+    } catch {
+      // Search failed
+    }
+    return null;
+  }
+
+  /**
+   * Match SENT emails to Jira issues by:
+   * 1. Finding explicit Jira issue keys in subject/body
+   * 2. Matching recipient company to Jira project, then searching for relevant issues
    */
   async matchEmailsToJiraIssues(emails: EmailMessage[]): Promise<EmailTaskMatch[]> {
     const matches: EmailTaskMatch[] = [];
 
-    for (const email of emails) {
+    // Only process SENT emails - these represent work done for clients
+    const sentEmails = emails.filter(e => e.isSent);
+
+    for (const email of sentEmails) {
       // First, check if email subject/body contains a Jira issue key
       const issueKeyPattern = /([A-Z][A-Z0-9]+-\d+)/g;
       const subjectMatches = email.subject.match(issueKeyPattern);
@@ -532,36 +634,38 @@ export class TempoClient {
         continue;
       }
 
-      // Search Jira for matching issues based on email content
-      const searchTerms = email.subject.split(/\s+/).filter((w) => w.length > 3).slice(0, 3).join(" ");
-      if (searchTerms) {
-        try {
-          const jql = encodeURIComponent(`text ~ "${searchTerms}" ORDER BY updated DESC`);
-          const response = await this.jiraRequest<{ issues: Array<{ key: string; fields: { summary: string } }> }>(
-            `/rest/api/3/search/jql?jql=${jql}&maxResults=1&fields=summary`
-          );
+      // Try to match by company -> project -> search for issue
+      const companyName = this.extractCompanyFromEmail(email);
+      if (companyName) {
+        const project = await this.findProjectByCompany(companyName);
+        if (project) {
+          // Extract meaningful search terms from email subject (skip common words)
+          const stopWords = ['re', 'fwd', 'fw', 'the', 'and', 'for', 'from', 'with', 'about'];
+          const searchTerms = email.subject
+            .split(/[\s:,\-\[\]]+/)
+            .filter(w => w.length > 2 && !stopWords.includes(w.toLowerCase()))
+            .slice(0, 3)
+            .join(" ");
 
-          if (response.issues && response.issues.length > 0) {
-            matches.push({
-              email,
-              issueKey: response.issues[0].key,
-              confidence: "low",
-              reason: `Jira search match: ${response.issues[0].fields.summary}`,
-            });
-            continue;
+          if (searchTerms) {
+            const issueKey = await this.searchIssuesInProject(project.key, searchTerms);
+            if (issueKey) {
+              matches.push({
+                email,
+                issueKey,
+                confidence: "medium",
+                reason: `Matched ${companyName} -> ${project.name}, found issue for "${searchTerms}"`,
+              });
+              continue;
+            }
           }
-        } catch {
-          // Jira search failed, skip
+
+          // No specific issue found, but we know the project - skip (don't add low confidence)
+          continue;
         }
       }
 
-      // No match found
-      matches.push({
-        email,
-        issueKey: null,
-        confidence: "low",
-        reason: "No matching Jira issue found",
-      });
+      // Skip emails we can't match - don't add low confidence matches
     }
 
     return matches;

@@ -12,6 +12,10 @@ export interface EmailTaskMatch {
     confidence: "high" | "medium" | "low";
     reason: string;
 }
+export interface JiraProject {
+    key: string;
+    name: string;
+}
 export interface TempoWorklog {
     tempoWorklogId: number;
     issue: {
@@ -107,6 +111,7 @@ export declare class TempoClient {
     private accountAttributeKey;
     private gmailOAuth;
     private gmailTokenPath;
+    private cachedProjects;
     constructor(config: {
         tempoToken: string;
         jiraToken: string;
@@ -155,7 +160,26 @@ export declare class TempoClient {
      */
     getEmails(startDate: string, endDate: string): Promise<EmailMessage[]>;
     /**
-     * Match emails to Jira issues by searching for keywords
+     * Get all Jira projects (cached)
+     */
+    getAllJiraProjects(): Promise<JiraProject[]>;
+    /**
+     * Extract company name from email recipient
+     * Handles formats like: "John Doe <john@company.com>", "john@company.com"
+     */
+    private extractCompanyFromEmail;
+    /**
+     * Find Jira project by company name using fuzzy matching
+     */
+    private findProjectByCompany;
+    /**
+     * Search for Jira issues in a project matching search terms
+     */
+    private searchIssuesInProject;
+    /**
+     * Match SENT emails to Jira issues by:
+     * 1. Finding explicit Jira issue keys in subject/body
+     * 2. Matching recipient company to Jira project, then searching for relevant issues
      */
     matchEmailsToJiraIssues(emails: EmailMessage[]): Promise<EmailTaskMatch[]>;
     createWorklog(params: CreateWorklogParams): Promise<TempoWorklog>;
