@@ -465,14 +465,78 @@ class TempoClient {
         return null;
     }
     /**
-     * Match SENT emails to Jira issues by:
-     * 1. Finding explicit Jira issue keys in subject/body
-     * 2. Matching recipient company to Jira project, then searching for relevant issues
+     * Extract keywords from text for similarity matching
+     */
+    extractKeywords(text) {
+        const stopWords = new Set([
+            're', 'fwd', 'fw', 'the', 'and', 'for', 'from', 'with', 'about', 'this', 'that',
+            'have', 'has', 'had', 'been', 'will', 'would', 'could', 'should', 'can', 'may',
+            'une', 'des', 'les', 'pour', 'dans', 'sur', 'avec', 'est', 'sont', 'qui', 'que',
+            'vous', 'nous', 'votre', 'notre', 'merci', 'bonjour', 'salut', 'cordialement'
+        ]);
+        return text
+            .toLowerCase()
+            .split(/[\s:,\-\[\]\(\)\/\\'"!?.]+/)
+            .filter(w => w.length > 2 && !stopWords.has(w) && !/^\d+$/.test(w));
+    }
+    /**
+     * Calculate similarity score between two sets of keywords (0-1)
+     */
+    calculateSimilarity(keywords1, keywords2) {
+        if (keywords1.length === 0 || keywords2.length === 0)
+            return 0;
+        const set1 = new Set(keywords1);
+        const set2 = new Set(keywords2);
+        let matches = 0;
+        for (const word of set1) {
+            if (set2.has(word)) {
+                matches++;
+            }
+            else {
+                // Partial match (one contains the other)
+                for (const word2 of set2) {
+                    if (word.includes(word2) || word2.includes(word)) {
+                        matches += 0.5;
+                        break;
+                    }
+                }
+            }
+        }
+        // Normalize by the smaller set size
+        return matches / Math.min(set1.size, set2.size);
+    }
+    /**
+     * Get all issues from current sprints across all projects
+     */
+    async getAllSprintIssues() {
+        try {
+            const jql = encodeURIComponent(`sprint in openSprints() ORDER BY updated DESC`);
+            const response = await this.jiraRequest(`/rest/api/3/search/jql?jql=${jql}&maxResults=200&fields=summary,project`);
+            return (response.issues || []).map(issue => ({
+                key: issue.key,
+                summary: issue.fields.summary,
+                project: issue.fields.project.key,
+            }));
+        }
+        catch {
+            return [];
+        }
+    }
+    /**
+     * Match SENT emails to Jira issues using AI-like similarity reasoning:
+     * 1. Check for explicit Jira issue keys in email
+     * 2. Match recipient company to project
+     * 3. Calculate keyword similarity between email and all sprint issues
+     * 4. Return best match if score is high enough
      */
     async matchEmailsToJiraIssues(emails) {
         const matches = [];
         // Only process SENT emails - these represent work done for clients
         const sentEmails = emails.filter(e => e.isSent);
+        if (sentEmails.length === 0)
+            return matches;
+        // Get all sprint issues once (cached for all emails)
+        const sprintIssues = await this.getAllSprintIssues();
         for (const email of sentEmails) {
             // First, check if email subject/body contains a Jira issue key
             const issueKeyPattern = /([A-Z][A-Z0-9]+-\d+)/g;
@@ -483,7 +547,7 @@ class TempoClient {
                     email,
                     issueKey: subjectMatches[0],
                     confidence: "high",
-                    reason: `Issue key found in subject: ${subjectMatches[0]}`,
+                    reason: `Issue key in subject: ${subjectMatches[0]}`,
                 });
                 continue;
             }
@@ -492,39 +556,41 @@ class TempoClient {
                     email,
                     issueKey: bodyMatches[0],
                     confidence: "medium",
-                    reason: `Issue key found in body: ${bodyMatches[0]}`,
+                    reason: `Issue key in body: ${bodyMatches[0]}`,
                 });
                 continue;
             }
-            // Try to match by company -> project -> search for issue
+            // AI-like matching: find the best matching issue based on similarity
             const companyName = this.extractCompanyFromEmail(email);
-            if (companyName) {
-                const project = await this.findProjectByCompany(companyName);
-                if (project) {
-                    // Extract meaningful search terms from email subject (skip common words)
-                    const stopWords = ['re', 'fwd', 'fw', 'the', 'and', 'for', 'from', 'with', 'about'];
-                    const searchTerms = email.subject
-                        .split(/[\s:,\-\[\]]+/)
-                        .filter(w => w.length > 2 && !stopWords.includes(w.toLowerCase()))
-                        .slice(0, 3)
-                        .join(" ");
-                    if (searchTerms) {
-                        const issueKey = await this.searchIssuesInProject(project.key, searchTerms);
-                        if (issueKey) {
-                            matches.push({
-                                email,
-                                issueKey,
-                                confidence: "medium",
-                                reason: `Matched ${companyName} -> ${project.name}, found issue for "${searchTerms}"`,
-                            });
-                            continue;
-                        }
-                    }
-                    // No specific issue found, but we know the project - skip (don't add low confidence)
-                    continue;
+            const matchedProject = companyName ? await this.findProjectByCompany(companyName) : null;
+            // Extract keywords from email content
+            const emailKeywords = this.extractKeywords(email.subject + ' ' + email.snippet);
+            if (emailKeywords.length === 0)
+                continue;
+            // Find best matching issue
+            let bestMatch = null;
+            for (const issue of sprintIssues) {
+                // If we matched a project from email recipient, prioritize issues from that project
+                const projectBonus = matchedProject && issue.project === matchedProject.key ? 0.3 : 0;
+                const issueKeywords = this.extractKeywords(issue.summary);
+                const similarity = this.calculateSimilarity(emailKeywords, issueKeywords);
+                const totalScore = similarity + projectBonus;
+                if (totalScore > 0.3 && (!bestMatch || totalScore > bestMatch.score)) {
+                    bestMatch = {
+                        key: issue.key,
+                        score: totalScore,
+                        reason: `Similarity: ${(similarity * 100).toFixed(0)}%${projectBonus ? ` + project match (${matchedProject?.name})` : ''} → "${issue.summary.substring(0, 50)}"`,
+                    };
                 }
             }
-            // Skip emails we can't match - don't add low confidence matches
+            if (bestMatch) {
+                matches.push({
+                    email,
+                    issueKey: bestMatch.key,
+                    confidence: bestMatch.score > 0.5 ? "high" : "medium",
+                    reason: bestMatch.reason,
+                });
+            }
         }
         return matches;
     }

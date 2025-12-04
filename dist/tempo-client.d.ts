@@ -178,9 +178,23 @@ export declare class TempoClient {
      */
     private searchIssuesInProject;
     /**
-     * Match SENT emails to Jira issues by:
-     * 1. Finding explicit Jira issue keys in subject/body
-     * 2. Matching recipient company to Jira project, then searching for relevant issues
+     * Extract keywords from text for similarity matching
+     */
+    private extractKeywords;
+    /**
+     * Calculate similarity score between two sets of keywords (0-1)
+     */
+    private calculateSimilarity;
+    /**
+     * Get all issues from current sprints across all projects
+     */
+    private getAllSprintIssues;
+    /**
+     * Match SENT emails to Jira issues using AI-like similarity reasoning:
+     * 1. Check for explicit Jira issue keys in email
+     * 2. Match recipient company to project
+     * 3. Calculate keyword similarity between email and all sprint issues
+     * 4. Return best match if score is high enough
      */
     matchEmailsToJiraIssues(emails: EmailMessage[]): Promise<EmailTaskMatch[]>;
     createWorklog(params: CreateWorklogParams): Promise<TempoWorklog>;
