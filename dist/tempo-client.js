@@ -409,11 +409,24 @@ class TempoClient {
         const nameContains = projects.find(p => p.name.toLowerCase().includes(searchName));
         if (nameContains)
             return nameContains;
-        // Third: company name contains project key (for abbreviations)
+        // Third: project name (without spaces) matches company name
+        // e.g., "laurinlaurin" matches "Laurin Laurin"
+        const nameNoSpaces = projects.find(p => p.name.toLowerCase().replace(/\s+/g, '').includes(searchName) ||
+            searchName.includes(p.name.toLowerCase().replace(/\s+/g, '')));
+        if (nameNoSpaces)
+            return nameNoSpaces;
+        // Fourth: company name contains project key (for abbreviations)
         const keyInCompany = projects.find(p => searchName.includes(p.key.toLowerCase()));
         if (keyInCompany)
             return keyInCompany;
-        // Fourth: fuzzy match - company name starts with similar letters as project
+        // Fifth: any word from project name is in company name
+        const wordMatch = projects.find(p => {
+            const projectWords = p.name.toLowerCase().split(/\s+/);
+            return projectWords.some(word => word.length > 3 && searchName.includes(word));
+        });
+        if (wordMatch)
+            return wordMatch;
+        // Sixth: fuzzy match - company name starts with similar letters as project
         const fuzzyMatch = projects.find(p => {
             const projectWords = p.name.toLowerCase().split(/\s+/);
             return projectWords.some(word => word.startsWith(searchName.substring(0, 3)));
