@@ -23,7 +23,8 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "googleapis": "^167.0.0"
+    "googleapis": "^167.0.0",
+    "open": "^11.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

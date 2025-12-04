@@ -5,6 +5,7 @@ import { google } from "googleapis";
 import { OAuth2Client } from "google-auth-library";
 import * as http from "http";
 import * as url from "url";
+import open from "open";
 
 const TEMPO_API_BASE = "https://api.tempo.io/4";
 
@@ -405,9 +406,12 @@ export class TempoClient {
         }
       });
 
-      server.listen(3000, () => {
+      server.listen(3000, async () => {
         const authUrl = this.getGmailAuthUrl();
-        console.log(`\n🔐 Open this URL in your browser to authorize Gmail:\n\n${authUrl}\n`);
+        console.log(`\n🔐 Opening browser for Gmail authorization...\n`);
+        if (authUrl) {
+          await open(authUrl);
+        }
       });
 
       // Timeout after 5 minutes

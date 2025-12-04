@@ -32,6 +32,9 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TempoClient = void 0;
 const child_process_1 = require("child_process");
@@ -40,6 +43,7 @@ const path_1 = require("path");
 const googleapis_1 = require("googleapis");
 const http = __importStar(require("http"));
 const url = __importStar(require("url"));
+const open_1 = __importDefault(require("open"));
 const TEMPO_API_BASE = "https://api.tempo.io/4";
 class TempoClient {
     tempoToken;
@@ -270,9 +274,12 @@ class TempoClient {
                     reject(e);
                 }
             });
-            server.listen(3000, () => {
+            server.listen(3000, async () => {
                 const authUrl = this.getGmailAuthUrl();
-                console.log(`\n🔐 Open this URL in your browser to authorize Gmail:\n\n${authUrl}\n`);
+                console.log(`\n🔐 Opening browser for Gmail authorization...\n`);
+                if (authUrl) {
+                    await (0, open_1.default)(authUrl);
+                }
             });
             // Timeout after 5 minutes
             setTimeout(() => {
