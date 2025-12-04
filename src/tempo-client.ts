@@ -1459,8 +1459,9 @@ export class TempoClient {
       }
 
       // Add sprint/project meetings from calendar
+      const oauthStatus = !this.gmailOAuth ? "no-oauth" : !this.gmailOAuth.credentials ? "no-creds" : !this.gmailOAuth.credentials.access_token ? "no-token" : "ok";
       const dayCalendarEvents = await this.getCalendarEvents(date, date);
-      result.errors.push(`[DEBUG] ${date}: ${dayCalendarEvents.length} calendar events`);
+      result.errors.push(`[DEBUG] ${date}: oauth=${oauthStatus}, ${dayCalendarEvents.length} events`);
       for (const event of dayCalendarEvents) {
         const titleLower = event.title.toLowerCase();
         const isSprintMeeting = /daily|standup|stand-up|sprint|planning|retro|review|refinement|grooming|sync|réunion|rencontre|bamboo|infusion|global/.test(titleLower);
