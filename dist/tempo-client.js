@@ -367,31 +367,50 @@ class TempoClient {
      * Only includes events where user is attending (accepted or tentative)
      */
     async getCalendarEvents(startDate, endDate) {
-        if (!this.gmailOAuth || !this.gmailOAuth.credentials?.access_token) {
-            console.error("[Calendar] OAuth not configured");
+        console.error(`[Calendar] getCalendarEvents called for ${startDate} to ${endDate}`);
+        if (!this.gmailOAuth) {
+            console.error("[Calendar] gmailOAuth is null");
             return [];
         }
+        if (!this.gmailOAuth.credentials) {
+            console.error("[Calendar] gmailOAuth.credentials is null");
+            return [];
+        }
+        if (!this.gmailOAuth.credentials.access_token) {
+            console.error("[Calendar] access_token is null");
+            return [];
+        }
+        console.error("[Calendar] OAuth is configured, fetching events...");
         const events = [];
         const calendar = googleapis_1.google.calendar({ version: "v3", auth: this.gmailOAuth });
         try {
+            const timeMin = new Date(startDate + "T00:00:00").toISOString();
+            const timeMax = new Date(endDate + "T23:59:59").toISOString();
+            console.error(`[Calendar] Query: timeMin=${timeMin}, timeMax=${timeMax}`);
             // Get events from primary calendar
             const response = await calendar.events.list({
                 calendarId: "primary",
-                timeMin: new Date(startDate + "T00:00:00").toISOString(),
-                timeMax: new Date(endDate + "T23:59:59").toISOString(),
+                timeMin,
+                timeMax,
                 singleEvents: true,
                 orderBy: "startTime",
                 maxResults: 100,
             });
+            const rawCount = response.data.items?.length || 0;
+            console.error(`[Calendar] API returned ${rawCount} raw events`);
             if (response.data.items) {
+                let skippedAllDay = 0;
+                let skippedDeclined = 0;
                 for (const event of response.data.items) {
                     // Skip all-day events (no specific time)
                     if (!event.start?.dateTime || !event.end?.dateTime) {
+                        skippedAllDay++;
                         continue;
                     }
                     // Skip declined events
                     const myAttendee = event.attendees?.find(a => a.self);
                     if (myAttendee?.responseStatus === "declined") {
+                        skippedDeclined++;
                         continue;
                     }
                     const startTime = new Date(event.start.dateTime);
@@ -408,13 +427,18 @@ class TempoClient {
                         attendees: (event.attendees || []).map(a => a.email || "").filter(e => e),
                         description: event.description || undefined,
                     });
+                    console.error(`[Calendar] Added event: "${event.summary}" on ${startTime.toISOString().split("T")[0]}`);
                 }
+                console.error(`[Calendar] Skipped ${skippedAllDay} all-day, ${skippedDeclined} declined`);
             }
         }
         catch (e) {
-            console.error("Calendar API error:", e);
+            console.error("[Calendar] API error:", e.message || e);
+            if (e.response?.data) {
+                console.error("[Calendar] Error details:", JSON.stringify(e.response.data));
+            }
         }
-        console.error(`[Calendar] Fetched ${events.length} events for ${startDate} to ${endDate}`);
+        console.error(`[Calendar] Final: ${events.length} events for ${startDate} to ${endDate}`);
         return events;
     }
     /**
@@ -1143,6 +1167,7 @@ class TempoClient {
             }
             // Add sprint/project meetings from calendar
             const dayCalendarEvents = await this.getCalendarEvents(date, date);
+            result.errors.push(`[DEBUG] ${date}: ${dayCalendarEvents.length} calendar events`);
             for (const event of dayCalendarEvents) {
                 const titleLower = event.title.toLowerCase();
                 const isSprintMeeting = /daily|standup|stand-up|sprint|planning|retro|review|refinement|grooming|sync|réunion|rencontre|bamboo|infusion|global/.test(titleLower);
