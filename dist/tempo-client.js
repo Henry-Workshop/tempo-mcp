@@ -368,7 +368,8 @@ class TempoClient {
      */
     async getCalendarEvents(startDate, endDate) {
         if (!this.gmailOAuth || !this.gmailOAuth.credentials?.access_token) {
-            return []; // Google OAuth not configured or not authenticated
+            console.error("[Calendar] OAuth not configured");
+            return [];
         }
         const events = [];
         const calendar = googleapis_1.google.calendar({ version: "v3", auth: this.gmailOAuth });
@@ -413,6 +414,7 @@ class TempoClient {
         catch (e) {
             console.error("Calendar API error:", e);
         }
+        console.error(`[Calendar] Fetched ${events.length} events for ${startDate} to ${endDate}`);
         return events;
     }
     /**
