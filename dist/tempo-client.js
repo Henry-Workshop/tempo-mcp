@@ -949,6 +949,41 @@ class TempoClient {
     /**
      * Generate a client-friendly description from commit messages
      */
+    translateToFrench(text) {
+        const translations = [
+            [/\bfix(ed|ing|es)?\b/gi, "Correctif"],
+            [/\badd(ed|ing|s)?\b/gi, "Ajout"],
+            [/\bremove(d|s)?\b/gi, "Suppression"],
+            [/\bupdate(d|s)?\b/gi, "Mise à jour"],
+            [/\brefactor(ed|ing)?\b/gi, "Refactorisation"],
+            [/\bclean(ed|ing|up)?\b/gi, "Nettoyage"],
+            [/\bput back\b/gi, "Remise en place"],
+            [/\brounding\b/gi, "arrondissement"],
+            [/\blogs?\b/gi, "journaux"],
+            [/\bscripts?\b/gi, "scripts"],
+            [/\bplace freed\b/gi, "place libérée"],
+            [/\bsize\b/gi, "taille"],
+            [/\bchange(d|s)?\b/gi, "Modification"],
+            [/\bcreate(d|s)?\b/gi, "Création"],
+            [/\bdelete(d|s)?\b/gi, "Suppression"],
+            [/\bimplement(ed|s)?\b/gi, "Implémentation"],
+            [/\bimprove(d|s)?\b/gi, "Amélioration"],
+            [/\bmerge(d|s)?\b/gi, "Fusion"],
+            [/\bmove(d|s)?\b/gi, "Déplacement"],
+            [/\brename(d|s)?\b/gi, "Renommage"],
+            [/\btest(s|ing)?\b/gi, "Test"],
+            [/\bdebug(ging)?\b/gi, "Débogage"],
+            [/\band\b/gi, "et"],
+            [/\bfor\b/gi, "pour"],
+            [/\bwith\b/gi, "avec"],
+            [/\bin\b/gi, "dans"],
+        ];
+        let result = text;
+        for (const [pattern, replacement] of translations) {
+            result = result.replace(pattern, replacement);
+        }
+        return result;
+    }
     generateDescription(commits) {
         const messages = commits.map(c => c.message);
         const cleanMessages = messages.map(msg => {
@@ -960,10 +995,10 @@ class TempoClient {
         }).filter(m => m.length > 0);
         if (cleanMessages.length === 0)
             return "Développement";
-        // Get unique summaries (first 60 chars of each, deduplicated)
+        // Get unique summaries, translate to French
         const uniqueSummaries = [...new Set(cleanMessages.map(m => {
-                // Capitalize first letter, truncate if needed
-                const summary = m.charAt(0).toUpperCase() + m.slice(1);
+                const translated = this.translateToFrench(m);
+                const summary = translated.charAt(0).toUpperCase() + translated.slice(1);
                 return summary.length > 60 ? summary.substring(0, 57) + "..." : summary;
             }))];
         // Take up to 3 summaries, join with " | "
