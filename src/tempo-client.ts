@@ -417,7 +417,8 @@ export class TempoClient {
 
     try {
       // Get commits with format: hash|date|message
-      const cmd = `git log --after="${startDate}T00:00:00" --before="${endDate}T23:59:59" --author="${author}" --pretty=format:"%H|%Y-%m-%d|%s" --no-merges`;
+      // Use %ad with --date=short for Windows compatibility (avoids %Y-%m-%d parsing issues)
+      const cmd = `git log --after="${startDate}T00:00:00" --before="${endDate}T23:59:59" --author="${author}" --pretty=format:"%H|%ad|%s" --date=short --no-merges`;
       const output = execSync(cmd, {
         cwd: repoPath,
         encoding: "utf8",
