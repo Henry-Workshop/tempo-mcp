@@ -1182,34 +1182,43 @@ export class TempoClient {
    * Generate a client-friendly description from commit messages
    */
   private generateDescription(commits: GitCommit[]): string {
-    // Group similar work and create a concise description
     const messages = commits.map(c => c.message);
 
-    // Remove issue keys and common prefixes from messages
     const cleanMessages = messages.map(msg => {
       return msg
-        .replace(/([A-Z][A-Z0-9]+-\d+)\s*[-:.]?\s*/g, "") // Remove issue keys
-        .replace(/^(feat|fix|chore|docs|refactor|test|style)[\s:(]+/i, "") // Remove conventional commit prefixes
-        .replace(/^\s*[-:]\s*/, "") // Remove leading dashes/colons
+        .replace(/([A-Z][A-Z0-9]+-\d+)\s*[-:.]?\s*/g, "")
+        .replace(/^(feat|fix|chore|docs|refactor|test|style)[\s:(]+/i, "")
+        .replace(/^\s*[-:]\s*/, "")
         .trim();
     }).filter(m => m.length > 0);
 
-    if (cleanMessages.length === 0) {
-      return "Development work";
-    }
+    if (cleanMessages.length === 0) return "Développement";
 
-    // Take unique messages and join them
-    const uniqueMessages = [...new Set(cleanMessages)];
-    if (uniqueMessages.length === 1) {
-      return uniqueMessages[0];
-    }
+    // Categorize work based on keywords
+    const allText = cleanMessages.join(" ").toLowerCase();
+    const types: string[] = [];
+    if (/correctif|fix|bug|corrig|patch/.test(allText)) types.push("Correctifs");
+    if (/design|ui|ux|interface|layout|style/.test(allText)) types.push("Design");
+    if (/refactor|clean|optim|amélio|improve/.test(allText)) types.push("Optimisation");
+    if (/add|ajout|nouveau|new|implement|créa|feature/.test(allText)) types.push("Développement");
+    if (/remove|suppr|delete|retir/.test(allText)) types.push("Nettoyage");
 
-    // Summarize if too many
-    if (uniqueMessages.length > 3) {
-      return uniqueMessages.slice(0, 3).join(", ") + "...";
-    }
+    return types.length > 0 ? types.slice(0, 2).join(" et ") : "Développement";
+  }
 
-    return uniqueMessages.join(", ");
+  /**
+   * Simplify email subject into client-friendly description
+   */
+  private simplifyEmailSubject(subject: string): string {
+    let clean = subject
+      .replace(/^(re|fwd|fw|tr):\s*/gi, "")
+      .replace(/^(re|fwd|fw|tr):\s*/gi, "")
+      .trim();
+    const parts = clean.split(/[-–—:]/);
+    if (parts.length > 1) clean = parts[0].trim();
+    if (clean.length > 0) clean = clean.charAt(0).toUpperCase() + clean.slice(1);
+    if (clean.length > 35) clean = clean.substring(0, 32) + "...";
+    return clean || "Suivi client";
   }
 
   /**
@@ -1450,7 +1459,7 @@ export class TempoClient {
             timesheetDay.entries.push({
               issueKey: emailTask.issueKey,
               hours: 0.25, // Minimum 15 min for email tasks
-              description: `Communication client - ${emailTask.email.subject}`,
+              description: `Suivi client - ${this.simplifyEmailSubject(emailTask.email.subject)}`,
               project: emailTask.issueKey.split("-")[0],
             });
             timesheetDay.totalHours += 0.25;

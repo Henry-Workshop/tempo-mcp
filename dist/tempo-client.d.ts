@@ -237,6 +237,10 @@ export declare class TempoClient {
      */
     private generateDescription;
     /**
+     * Simplify email subject into client-friendly description
+     */
+    private simplifyEmailSubject;
+    /**
      * Generate timesheet from git commits
      */
     generateTimesheet(params: GenerateTimesheetParams): Promise<TimesheetResult>;
