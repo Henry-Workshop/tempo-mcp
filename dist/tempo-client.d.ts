@@ -56,6 +56,7 @@ export interface GitCommit {
     message: string;
     issueKeys: string[];
     project: string;
+    linesChanged: number;
 }
 export interface TimesheetDay {
     date: string;
@@ -105,6 +106,14 @@ export declare class TempoClient {
     getRoles(): Promise<TempoRole[]>;
     getIssueId(issueKey: string): Promise<number>;
     getIssueAccount(issueKey: string): Promise<string | null>;
+    /**
+     * Get story points and summary for a Jira issue
+     * Story points field varies by Jira instance - common fields: customfield_10016, customfield_10026
+     */
+    getIssueDetails(issueKey: string): Promise<{
+        storyPoints: number | null;
+        summary: string;
+    }>;
     getCurrentUserAccountId(): Promise<string>;
     getWorklogs(startDate: string, endDate: string): Promise<TempoWorklog[]>;
     getWorklog(worklogId: string): Promise<TempoWorklog>;

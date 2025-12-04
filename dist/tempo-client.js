@@ -91,6 +91,31 @@ class TempoClient {
         }
         return null;
     }
+    /**
+     * Get story points and summary for a Jira issue
+     * Story points field varies by Jira instance - common fields: customfield_10016, customfield_10026
+     */
+    async getIssueDetails(issueKey) {
+        try {
+            // Request common story point fields and summary
+            const issue = await this.jiraRequest(`/rest/api/2/issue/${issueKey}?fields=summary,customfield_10016,customfield_10026,customfield_10004`);
+            const summary = issue.fields.summary || "";
+            // Try common story point field names
+            let storyPoints = null;
+            const possibleFields = ['customfield_10016', 'customfield_10026', 'customfield_10004'];
+            for (const field of possibleFields) {
+                const value = issue.fields[field];
+                if (typeof value === 'number') {
+                    storyPoints = value;
+                    break;
+                }
+            }
+            return { storyPoints, summary };
+        }
+        catch {
+            return { storyPoints: null, summary: "" };
+        }
+    }
     async getCurrentUserAccountId() {
         const user = await this.jiraRequest("/rest/api/2/myself");
         return user.accountId;
@@ -251,9 +276,9 @@ class TempoClient {
         const commits = [];
         const projectName = repoPath.split(/[/\\]/).pop() || "unknown";
         try {
-            // Get commits with format: hash|date|message
+            // Get commits with format: hash|date|message and include shortstat for lines changed
             // Use %ad with --date=short for Windows compatibility (avoids %Y-%m-%d parsing issues)
-            const cmd = `git log --after="${startDate}T00:00:00" --before="${endDate}T23:59:59" --author="${author}" --pretty=format:"%H|%ad|%s" --date=short --no-merges`;
+            const cmd = `git log --after="${startDate}T00:00:00" --before="${endDate}T23:59:59" --author="${author}" --pretty=format:"COMMIT|%H|%ad|%s" --date=short --shortstat --no-merges`;
             const output = (0, child_process_1.execSync)(cmd, {
                 cwd: repoPath,
                 encoding: "utf8",
@@ -262,25 +287,62 @@ class TempoClient {
             if (!output.trim()) {
                 return commits;
             }
+            // Parse output - each commit has a COMMIT line followed by optional stat line
             const lines = output.trim().split("\n");
+            let currentCommit = null;
             for (const line of lines) {
-                const parts = line.split("|");
-                if (parts.length >= 3) {
-                    const hash = parts[0];
-                    const date = parts[1];
-                    const message = parts.slice(2).join("|"); // In case message contains |
-                    // Extract Jira issue keys (pattern: ABC-123)
+                if (line.startsWith("COMMIT|")) {
+                    // Save previous commit if exists
+                    if (currentCommit) {
+                        const issueKeyPattern = /([A-Z][A-Z0-9]+-\d+)/g;
+                        const matches = currentCommit.message.match(issueKeyPattern) || [];
+                        const issueKeys = [...new Set(matches)];
+                        commits.push({
+                            ...currentCommit,
+                            issueKeys,
+                            project: projectName,
+                            linesChanged: 10, // Default minimum if no stats
+                        });
+                    }
+                    const parts = line.split("|");
+                    if (parts.length >= 4) {
+                        currentCommit = {
+                            hash: parts[1],
+                            date: parts[2],
+                            message: parts.slice(3).join("|"),
+                        };
+                    }
+                }
+                else if (currentCommit && (line.includes("insertion") || line.includes("deletion"))) {
+                    // Parse stat line: " 3 files changed, 45 insertions(+), 12 deletions(-)"
+                    const insertions = line.match(/(\d+) insertion/);
+                    const deletions = line.match(/(\d+) deletion/);
+                    const linesChanged = (insertions ? parseInt(insertions[1]) : 0) + (deletions ? parseInt(deletions[1]) : 0);
                     const issueKeyPattern = /([A-Z][A-Z0-9]+-\d+)/g;
-                    const matches = message.match(issueKeyPattern) || [];
-                    const issueKeys = [...new Set(matches)]; // Remove duplicates
+                    const matches = currentCommit.message.match(issueKeyPattern) || [];
+                    const issueKeys = [...new Set(matches)];
                     commits.push({
-                        hash,
-                        date,
-                        message,
+                        hash: currentCommit.hash,
+                        date: currentCommit.date,
+                        message: currentCommit.message,
                         issueKeys,
                         project: projectName,
+                        linesChanged: Math.max(linesChanged, 10), // Minimum 10 lines to avoid 0-weight commits
                     });
+                    currentCommit = null;
                 }
+            }
+            // Don't forget last commit if no stat line followed
+            if (currentCommit) {
+                const issueKeyPattern = /([A-Z][A-Z0-9]+-\d+)/g;
+                const matches = currentCommit.message.match(issueKeyPattern) || [];
+                const issueKeys = [...new Set(matches)];
+                commits.push({
+                    ...currentCommit,
+                    issueKeys,
+                    project: projectName,
+                    linesChanged: 10,
+                });
             }
         }
         catch {
@@ -376,14 +438,6 @@ class TempoClient {
             if (dayOfWeek === "Monday") {
                 const mondayMeetingMinutes = 15;
                 availableMinutes -= mondayMeetingMinutes;
-                // Add BS-14 entry
-                dayCommits.push({
-                    hash: "meeting",
-                    date,
-                    message: "Weekly team sync",
-                    issueKeys: [mondayMeetingIssue],
-                    project: mondayMeetingIssue.split("-")[0],
-                });
             }
             if (dayCommits.length === 0) {
                 // No commits for this day
@@ -391,9 +445,9 @@ class TempoClient {
                 result.days.push(timesheetDay);
                 continue;
             }
-            // Group commits by issue key
+            // Group commits by issue key and track lines changed per project
             const issueCommits = new Map();
-            const projectCounts = new Map();
+            const projectLines = new Map(); // Track total lines per project
             for (const commit of dayCommits) {
                 if (commit.issueKeys.length === 0) {
                     // Commit without issue key - skip or add to generic
@@ -404,28 +458,48 @@ class TempoClient {
                     existing.push(commit);
                     issueCommits.set(key, existing);
                 }
-                // Count project occurrences for sprint meeting
-                const count = projectCounts.get(commit.project) || 0;
-                projectCounts.set(commit.project, count + 1);
+                // Track lines changed per project (use issue key prefix as project)
+                const projectKey = commit.issueKeys[0]?.split("-")[0] || commit.project;
+                const currentLines = projectLines.get(projectKey) || 0;
+                projectLines.set(projectKey, currentLines + commit.linesChanged);
             }
-            // Determine the main project for sprint meeting
+            // Determine the main project for sprint meeting (based on lines changed)
             let mainProject = "";
-            let maxCount = 0;
-            for (const [project, count] of projectCounts) {
-                if (count > maxCount) {
-                    maxCount = count;
+            let maxLines = 0;
+            for (const [project, lines] of projectLines) {
+                if (lines > maxLines) {
+                    maxLines = lines;
                     mainProject = project;
                 }
             }
-            // Calculate hours per issue
+            // Calculate hours per issue based on lines changed and story points
             const issueKeys = [...issueCommits.keys()];
             if (issueKeys.length > 0) {
-                // Calculate time per issue based on commit count weight
-                const totalCommits = dayCommits.length;
+                // Fetch story points for all issues (in parallel for efficiency)
+                const issueDetailsMap = new Map();
+                await Promise.all(issueKeys.map(async (key) => {
+                    const details = await this.getIssueDetails(key);
+                    issueDetailsMap.set(key, details);
+                }));
+                // Calculate weighted score for each issue: linesChanged * storyPointMultiplier
+                // Story points act as a multiplier (1 SP = base, 3 SP = 3x weight, etc.)
+                const issueWeights = new Map();
+                let totalWeight = 0;
                 for (const issueKey of issueKeys) {
                     const commits = issueCommits.get(issueKey) || [];
-                    const weight = commits.length / totalCommits;
-                    const minutes = Math.round(availableMinutes * weight);
+                    const issueLines = commits.reduce((sum, c) => sum + c.linesChanged, 0);
+                    const details = issueDetailsMap.get(issueKey);
+                    // Use story points as multiplier (default to 1 if not set)
+                    const storyPointMultiplier = details?.storyPoints || 1;
+                    const weight = issueLines * storyPointMultiplier;
+                    issueWeights.set(issueKey, weight);
+                    totalWeight += weight;
+                }
+                for (const issueKey of issueKeys) {
+                    const commits = issueCommits.get(issueKey) || [];
+                    const weight = issueWeights.get(issueKey) || 0;
+                    const weightRatio = weight / totalWeight;
+                    const minutes = Math.round(availableMinutes * weightRatio);
                     const hours = Math.round((minutes / 60) * 100) / 100; // Round to 2 decimals
                     if (hours >= 0.25) { // Minimum 15 minutes
                         const description = this.generateDescription(commits);
@@ -438,18 +512,28 @@ class TempoClient {
                         timesheetDay.totalHours += hours;
                     }
                 }
-                // Add sprint meeting to main project
+                // Add daily standup to main project's Sprint Meetings issue
                 if (mainProject) {
                     const sprintIssue = await this.findSprintMeetingsIssue(mainProject);
                     if (sprintIssue) {
                         timesheetDay.entries.push({
                             issueKey: sprintIssue,
                             hours: sprintMeetingMinutes / 60,
-                            description: "Daily standup",
+                            description: "Daily",
                             project: mainProject,
                         });
                         timesheetDay.totalHours += sprintMeetingMinutes / 60;
                     }
+                }
+                // Add Monday team sync (BS-14)
+                if (dayOfWeek === "Monday") {
+                    timesheetDay.entries.push({
+                        issueKey: mondayMeetingIssue,
+                        hours: 0.25, // 15 minutes
+                        description: "Weekly team sync",
+                        project: mondayMeetingIssue.split("-")[0],
+                    });
+                    timesheetDay.totalHours += 0.25;
                 }
             }
             // Normalize to exactly 8 hours if needed
