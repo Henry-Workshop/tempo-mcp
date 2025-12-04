@@ -703,23 +703,27 @@ export class TempoClient {
           totalWeight += weight;
         }
 
+        // Helper to round to nearest 0.25 (15 min blocks)
+        const roundTo15Min = (h: number): number => Math.round(h * 4) / 4;
+
         for (const issueKey of issueKeys) {
-          const commits = issueCommits.get(issueKey) || [];
           const weight = issueWeights.get(issueKey) || 0;
           const weightRatio = weight / totalWeight;
-          const minutes = Math.round(availableMinutes * weightRatio);
-          const hours = Math.round((minutes / 60) * 100) / 100; // Round to 2 decimals
+          const rawHours = (availableMinutes * weightRatio) / 60;
+          // Round to 15 min blocks, minimum 0.25h (15 min) if there's any work
+          const hours = Math.max(0.25, roundTo15Min(rawHours));
 
-          if (hours >= 0.25) { // Minimum 15 minutes
-            const description = this.generateDescription(commits);
-            timesheetDay.entries.push({
-              issueKey,
-              hours,
-              description,
-              project: issueKey.split("-")[0],
-            });
-            timesheetDay.totalHours += hours;
-          }
+          // Use Jira summary as description
+          const details = issueDetailsMap.get(issueKey);
+          const description = details?.summary || issueKey;
+
+          timesheetDay.entries.push({
+            issueKey,
+            hours,
+            description,
+            project: issueKey.split("-")[0],
+          });
+          timesheetDay.totalHours += hours;
         }
 
         // Add daily standup to main project's Sprint Meetings issue
@@ -748,12 +752,30 @@ export class TempoClient {
         }
       }
 
-      // Normalize to exactly 8 hours if needed
-      if (timesheetDay.entries.length > 0 && Math.abs(timesheetDay.totalHours - 8) > 0.01) {
-        const factor = 8 / timesheetDay.totalHours;
+      // Normalize to exactly 8 hours in 15-min blocks
+      if (timesheetDay.entries.length > 0) {
+        const roundTo15Min = (h: number): number => Math.round(h * 4) / 4;
+        const targetHours = 8;
+
+        // First pass: scale and round to 15-min blocks
+        const factor = targetHours / timesheetDay.totalHours;
         for (const entry of timesheetDay.entries) {
-          entry.hours = Math.round(entry.hours * factor * 100) / 100;
+          entry.hours = Math.max(0.25, roundTo15Min(entry.hours * factor));
         }
+
+        // Calculate difference and adjust largest entry to hit exactly 8h
+        let currentTotal = timesheetDay.entries.reduce((sum, e) => sum + e.hours, 0);
+        const diff = roundTo15Min(targetHours - currentTotal);
+
+        if (Math.abs(diff) >= 0.25) {
+          // Find the largest non-meeting entry to adjust
+          const adjustableEntries = timesheetDay.entries.filter(e => !e.description.includes("Daily") && !e.description.includes("team sync"));
+          if (adjustableEntries.length > 0) {
+            const largest = adjustableEntries.reduce((a, b) => a.hours > b.hours ? a : b);
+            largest.hours = Math.max(0.25, roundTo15Min(largest.hours + diff));
+          }
+        }
+
         timesheetDay.totalHours = timesheetDay.entries.reduce((sum, e) => sum + e.hours, 0);
       }
 
