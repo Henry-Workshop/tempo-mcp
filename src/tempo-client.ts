@@ -1,3 +1,7 @@
+import { execSync } from "child_process";
+import { readdirSync, statSync, existsSync } from "fs";
+import { join } from "path";
+
 const TEMPO_API_BASE = "https://api.tempo.io/4";
 
 export interface TempoWorklog {
@@ -55,6 +59,42 @@ export interface UpdateWorklogParams {
   startTime?: string;
   role?: string;
   accountKey?: string;
+}
+
+export interface GitCommit {
+  hash: string;
+  date: string;
+  message: string;
+  issueKeys: string[];
+  project: string;
+}
+
+export interface TimesheetDay {
+  date: string;
+  dayOfWeek: string;
+  entries: TimesheetEntry[];
+  totalHours: number;
+}
+
+export interface TimesheetEntry {
+  issueKey: string;
+  hours: number;
+  description: string;
+  project: string;
+}
+
+export interface GenerateTimesheetParams {
+  weekStart: string; // Monday date YYYY-MM-DD
+  gitAuthor: string; // Git author email or name
+  projectsDir: string; // Directory containing git repos
+  dryRun?: boolean; // If true, only return plan without creating worklogs
+  mondayMeetingIssue?: string; // Issue for Monday meeting (default: BS-14)
+}
+
+export interface TimesheetResult {
+  days: TimesheetDay[];
+  worklogsCreated: number;
+  errors: string[];
 }
 
 export class TempoClient {
@@ -332,5 +372,313 @@ export class TempoClient {
     await this.tempoRequest(`/worklogs/${worklogId}`, {
       method: "DELETE",
     });
+  }
+
+  /**
+   * Scan a directory for git repositories
+   */
+  scanGitRepos(projectsDir: string): string[] {
+    const repos: string[] = [];
+
+    if (!existsSync(projectsDir)) {
+      throw new Error(`Directory does not exist: ${projectsDir}`);
+    }
+
+    const entries = readdirSync(projectsDir);
+    for (const entry of entries) {
+      const fullPath = join(projectsDir, entry);
+      try {
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          const gitDir = join(fullPath, ".git");
+          if (existsSync(gitDir)) {
+            repos.push(fullPath);
+          }
+        }
+      } catch {
+        // Skip entries we can't access
+      }
+    }
+
+    return repos;
+  }
+
+  /**
+   * Extract commits from a git repo for a specific date range and author
+   */
+  getGitCommits(
+    repoPath: string,
+    startDate: string,
+    endDate: string,
+    author: string
+  ): GitCommit[] {
+    const commits: GitCommit[] = [];
+    const projectName = repoPath.split(/[/\\]/).pop() || "unknown";
+
+    try {
+      // Get commits with format: hash|date|message
+      const cmd = `git log --after="${startDate}T00:00:00" --before="${endDate}T23:59:59" --author="${author}" --pretty=format:"%H|%Y-%m-%d|%s" --no-merges`;
+      const output = execSync(cmd, {
+        cwd: repoPath,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+
+      if (!output.trim()) {
+        return commits;
+      }
+
+      const lines = output.trim().split("\n");
+      for (const line of lines) {
+        const parts = line.split("|");
+        if (parts.length >= 3) {
+          const hash = parts[0];
+          const date = parts[1];
+          const message = parts.slice(2).join("|"); // In case message contains |
+
+          // Extract Jira issue keys (pattern: ABC-123)
+          const issueKeyPattern = /([A-Z][A-Z0-9]+-\d+)/g;
+          const matches = message.match(issueKeyPattern) || [];
+          const issueKeys = [...new Set(matches)]; // Remove duplicates
+
+          commits.push({
+            hash,
+            date,
+            message,
+            issueKeys,
+            project: projectName,
+          });
+        }
+      }
+    } catch {
+      // Git command failed, skip this repo
+    }
+
+    return commits;
+  }
+
+  /**
+   * Generate a client-friendly description from commit messages
+   */
+  private generateDescription(commits: GitCommit[]): string {
+    // Group similar work and create a concise description
+    const messages = commits.map(c => c.message);
+
+    // Remove issue keys and common prefixes from messages
+    const cleanMessages = messages.map(msg => {
+      return msg
+        .replace(/([A-Z][A-Z0-9]+-\d+)\s*[-:.]?\s*/g, "") // Remove issue keys
+        .replace(/^(feat|fix|chore|docs|refactor|test|style)[\s:(]+/i, "") // Remove conventional commit prefixes
+        .replace(/^\s*[-:]\s*/, "") // Remove leading dashes/colons
+        .trim();
+    }).filter(m => m.length > 0);
+
+    if (cleanMessages.length === 0) {
+      return "Development work";
+    }
+
+    // Take unique messages and join them
+    const uniqueMessages = [...new Set(cleanMessages)];
+    if (uniqueMessages.length === 1) {
+      return uniqueMessages[0];
+    }
+
+    // Summarize if too many
+    if (uniqueMessages.length > 3) {
+      return uniqueMessages.slice(0, 3).join(", ") + "...";
+    }
+
+    return uniqueMessages.join(", ");
+  }
+
+  /**
+   * Generate timesheet from git commits
+   */
+  async generateTimesheet(params: GenerateTimesheetParams): Promise<TimesheetResult> {
+    const { weekStart, gitAuthor, projectsDir, dryRun = false, mondayMeetingIssue = "BS-14" } = params;
+
+    const result: TimesheetResult = {
+      days: [],
+      worklogsCreated: 0,
+      errors: [],
+    };
+
+    // Calculate the 4 days (Monday to Thursday)
+    const startDate = new Date(weekStart);
+    const days = ["Monday", "Tuesday", "Wednesday", "Thursday"];
+    const workDates: { date: string; dayOfWeek: string }[] = [];
+
+    for (let i = 0; i < 4; i++) {
+      const d = new Date(startDate);
+      d.setDate(startDate.getDate() + i);
+      workDates.push({
+        date: d.toISOString().split("T")[0],
+        dayOfWeek: days[i],
+      });
+    }
+
+    // Scan for git repos
+    const repos = this.scanGitRepos(projectsDir);
+    if (repos.length === 0) {
+      result.errors.push(`No git repositories found in ${projectsDir}`);
+      return result;
+    }
+
+    // Collect all commits for the week
+    const weekEnd = workDates[3].date;
+    const allCommits: GitCommit[] = [];
+
+    for (const repo of repos) {
+      const commits = this.getGitCommits(repo, weekStart, weekEnd, gitAuthor);
+      allCommits.push(...commits);
+    }
+
+    // Group commits by date
+    const commitsByDate = new Map<string, GitCommit[]>();
+    for (const commit of allCommits) {
+      const existing = commitsByDate.get(commit.date) || [];
+      existing.push(commit);
+      commitsByDate.set(commit.date, existing);
+    }
+
+    // Process each day
+    for (const { date, dayOfWeek } of workDates) {
+      const dayCommits = commitsByDate.get(date) || [];
+      const timesheetDay: TimesheetDay = {
+        date,
+        dayOfWeek,
+        entries: [],
+        totalHours: 0,
+      };
+
+      // Calculate available time (8h - meetings)
+      let availableMinutes = 8 * 60; // 480 minutes
+
+      // Daily sprint meeting (15 min) - will be added to main project
+      const sprintMeetingMinutes = 15;
+      availableMinutes -= sprintMeetingMinutes;
+
+      // Monday: additional 15 min for BS-14
+      if (dayOfWeek === "Monday") {
+        const mondayMeetingMinutes = 15;
+        availableMinutes -= mondayMeetingMinutes;
+
+        // Add BS-14 entry
+        dayCommits.push({
+          hash: "meeting",
+          date,
+          message: "Weekly team sync",
+          issueKeys: [mondayMeetingIssue],
+          project: mondayMeetingIssue.split("-")[0],
+        });
+      }
+
+      if (dayCommits.length === 0) {
+        // No commits for this day
+        result.errors.push(`No commits found for ${dayOfWeek} (${date})`);
+        result.days.push(timesheetDay);
+        continue;
+      }
+
+      // Group commits by issue key
+      const issueCommits = new Map<string, GitCommit[]>();
+      const projectCounts = new Map<string, number>();
+
+      for (const commit of dayCommits) {
+        if (commit.issueKeys.length === 0) {
+          // Commit without issue key - skip or add to generic
+          continue;
+        }
+
+        for (const key of commit.issueKeys) {
+          const existing = issueCommits.get(key) || [];
+          existing.push(commit);
+          issueCommits.set(key, existing);
+        }
+
+        // Count project occurrences for sprint meeting
+        const count = projectCounts.get(commit.project) || 0;
+        projectCounts.set(commit.project, count + 1);
+      }
+
+      // Determine the main project for sprint meeting
+      let mainProject = "";
+      let maxCount = 0;
+      for (const [project, count] of projectCounts) {
+        if (count > maxCount) {
+          maxCount = count;
+          mainProject = project;
+        }
+      }
+
+      // Calculate hours per issue
+      const issueKeys = [...issueCommits.keys()];
+      if (issueKeys.length > 0) {
+        // Calculate time per issue based on commit count weight
+        const totalCommits = dayCommits.length;
+
+        for (const issueKey of issueKeys) {
+          const commits = issueCommits.get(issueKey) || [];
+          const weight = commits.length / totalCommits;
+          const minutes = Math.round(availableMinutes * weight);
+          const hours = Math.round((minutes / 60) * 100) / 100; // Round to 2 decimals
+
+          if (hours >= 0.25) { // Minimum 15 minutes
+            const description = this.generateDescription(commits);
+            timesheetDay.entries.push({
+              issueKey,
+              hours,
+              description,
+              project: issueKey.split("-")[0],
+            });
+            timesheetDay.totalHours += hours;
+          }
+        }
+
+        // Add sprint meeting to main project
+        if (mainProject) {
+          const sprintIssue = await this.findSprintMeetingsIssue(mainProject);
+          if (sprintIssue) {
+            timesheetDay.entries.push({
+              issueKey: sprintIssue,
+              hours: sprintMeetingMinutes / 60,
+              description: "Daily standup",
+              project: mainProject,
+            });
+            timesheetDay.totalHours += sprintMeetingMinutes / 60;
+          }
+        }
+      }
+
+      // Normalize to exactly 8 hours if needed
+      if (timesheetDay.entries.length > 0 && Math.abs(timesheetDay.totalHours - 8) > 0.01) {
+        const factor = 8 / timesheetDay.totalHours;
+        for (const entry of timesheetDay.entries) {
+          entry.hours = Math.round(entry.hours * factor * 100) / 100;
+        }
+        timesheetDay.totalHours = timesheetDay.entries.reduce((sum, e) => sum + e.hours, 0);
+      }
+
+      result.days.push(timesheetDay);
+
+      // Create worklogs if not dry run
+      if (!dryRun) {
+        for (const entry of timesheetDay.entries) {
+          try {
+            await this.createWorklog({
+              issueKey: entry.issueKey,
+              timeSpentHours: entry.hours,
+              date,
+              description: entry.description,
+            });
+            result.worklogsCreated++;
+          } catch (error) {
+            result.errors.push(`Failed to create worklog for ${entry.issueKey} on ${date}: ${error}`);
+          }
+        }
+      }
+    }
+
+    return result;
   }
 }

@@ -4,6 +4,7 @@ MCP (Model Context Protocol) server for Tempo time tracking with full support fo
 
 ## Features
 
+- **Auto-generate timesheets from git commits** - scans all your repos and creates worklogs automatically
 - Create worklogs with role and account attributes
 - Automatically fetch account from Jira issue
 - **Auto-fallback to active account** when issue's account is closed/archived
@@ -47,6 +48,10 @@ npm run build
 | `JIRA_BASE_URL` | Yes | Jira base URL (e.g., https://company.atlassian.net) |
 | `JIRA_ACCOUNT_FIELD_ID` | No | Custom field ID for Tempo account (default: 10026) |
 | `DEFAULT_ROLE` | No | Default role for worklogs (default: Dev) |
+| `DEFAULT_PROJECTS_DIR` | No | Default directory for git repos (e.g., C:/Users/you/Projects) |
+| `DEFAULT_MONDAY_MEETING_ISSUE` | No | Jira issue for Monday team meeting (default: BS-14) |
+
+> **Note:** `gitAuthor` defaults to `JIRA_EMAIL` since they're the same for all developers.
 
 ## Usage with Claude Code
 
@@ -54,7 +59,13 @@ npm run build
 
 **Linux/macOS:**
 ```bash
-claude mcp add tempo-mcp -s user   -e TEMPO_API_TOKEN=your-tempo-token   -e JIRA_API_TOKEN=your-jira-token   -e JIRA_EMAIL=your-email@company.com   -e JIRA_BASE_URL=https://company.atlassian.net   -- npx -y github:Henry-Workshop/tempo-mcp
+claude mcp add tempo-mcp -s user \
+  -e TEMPO_API_TOKEN=your-tempo-token \
+  -e JIRA_API_TOKEN=your-jira-token \
+  -e JIRA_EMAIL=your-email@company.com \
+  -e JIRA_BASE_URL=https://company.atlassian.net \
+  -e DEFAULT_PROJECTS_DIR=/home/you/projects \
+  -- npx -y github:Henry-Workshop/tempo-mcp
 ```
 
 **Windows (PowerShell):**
@@ -64,12 +75,8 @@ claude mcp add tempo-mcp -s user `
   -e JIRA_API_TOKEN=your-jira-token `
   -e JIRA_EMAIL=your-email@company.com `
   -e JIRA_BASE_URL=https://company.atlassian.net `
+  -e DEFAULT_PROJECTS_DIR=C:/Users/you/Projects `
   -- npx.cmd -y github:Henry-Workshop/tempo-mcp
-```
-
-**Windows (CMD - single line):**
-```cmd
-claude mcp add tempo-mcp -s user -e TEMPO_API_TOKEN=your-tempo-token -e JIRA_API_TOKEN=your-jira-token -e JIRA_EMAIL=your-email@company.com -e JIRA_BASE_URL=https://company.atlassian.net -- npx.cmd -y github:Henry-Workshop/tempo-mcp
 ```
 
 ### Example configuration in claude.json
@@ -84,7 +91,8 @@ claude mcp add tempo-mcp -s user -e TEMPO_API_TOKEN=your-tempo-token -e JIRA_API
         "TEMPO_API_TOKEN": "your-tempo-token",
         "JIRA_API_TOKEN": "your-jira-token",
         "JIRA_EMAIL": "your-email@company.com",
-        "JIRA_BASE_URL": "https://company.atlassian.net"
+        "JIRA_BASE_URL": "https://company.atlassian.net",
+        "DEFAULT_PROJECTS_DIR": "C:/Users/you/Projects"
       }
     }
   }
@@ -92,6 +100,47 @@ claude mcp add tempo-mcp -s user -e TEMPO_API_TOKEN=your-tempo-token -e JIRA_API
 ```
 
 ## Available Tools
+
+### tempo_generate_timesheet
+
+**The main feature!** Automatically generate your weekly timesheet from git commits.
+
+```json
+{
+  "weekStart": "2025-12-01",
+  "gitAuthor": "your-email@company.com",
+  "projectsDir": "C:/Users/you/Projects",
+  "dryRun": true,
+  "mondayMeetingIssue": "BS-14"
+}
+```
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `weekStart` | Yes | Monday date of the week (YYYY-MM-DD) |
+| `gitAuthor` | Yes | Your git author email or name |
+| `projectsDir` | Yes | Directory containing all your git repositories |
+| `dryRun` | No | If true, shows plan without creating worklogs (default: false) |
+| `mondayMeetingIssue` | No | Jira issue for Monday team meeting (default: BS-14) |
+
+**What it does:**
+1. Scans all git repos in `projectsDir`
+2. Extracts your commits for Monday-Thursday
+3. Parses Jira issue keys from commit messages (e.g., `PROJ-123`)
+4. Distributes 8h/day based on commit count per issue
+5. Adds 15min daily sprint meeting (on the main project of the day)
+6. Adds 15min Monday team sync on BS-14
+7. Generates client-friendly descriptions from commit messages
+8. Creates worklogs in Tempo
+
+**Example usage in Claude Code:**
+- "fait ma feuille de temps de cette semaine"
+- "generate my timesheet for last week"
+- "do my timesheet for the week of december 1st in dry run mode"
+
+**Important:** Your commit messages should include Jira issue keys (e.g., `PROJ-123 fix: description`). Commits without issue keys will be flagged as warnings.
+
+---
 
 ### tempo_log_sprint_meeting
 

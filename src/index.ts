@@ -15,6 +15,8 @@ const JIRA_EMAIL = process.env.JIRA_EMAIL;
 const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
 const JIRA_ACCOUNT_FIELD_ID = process.env.JIRA_ACCOUNT_FIELD_ID || "10026";
 const DEFAULT_ROLE = process.env.DEFAULT_ROLE || "Dev";
+const DEFAULT_PROJECTS_DIR = process.env.DEFAULT_PROJECTS_DIR || "";
+const DEFAULT_MONDAY_MEETING_ISSUE = process.env.DEFAULT_MONDAY_MEETING_ISSUE || "BS-14";
 
 if (!TEMPO_API_TOKEN || !JIRA_API_TOKEN || !JIRA_EMAIL || !JIRA_BASE_URL) {
   console.error("Missing required environment variables:");
@@ -212,6 +214,37 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["projectKey", "timeSpentMinutes", "description"],
         },
       },
+      {
+        name: "tempo_generate_timesheet",
+        description: `Generate timesheet from git commits. Scans all git repositories in a directory, extracts commits for the week (Mon-Thu), and creates worklogs based on Jira issue keys found in commit messages. Includes 15min daily sprint meetings and 15min Monday meeting. Uses JIRA_EMAIL as git author.${DEFAULT_PROJECTS_DIR ? ` Default projectsDir: ${DEFAULT_PROJECTS_DIR}` : ""}`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            weekStart: {
+              type: "string",
+              description: "Monday date of the week (YYYY-MM-DD)",
+              pattern: "^\\d{4}-\\d{2}-\\d{2}$",
+            },
+            gitAuthor: {
+              type: "string",
+              description: `Git author email to filter commits (default: JIRA_EMAIL = ${JIRA_EMAIL})`,
+            },
+            projectsDir: {
+              type: "string",
+              description: `Directory containing git repositories${DEFAULT_PROJECTS_DIR ? ` (default: ${DEFAULT_PROJECTS_DIR})` : ""}`,
+            },
+            dryRun: {
+              type: "boolean",
+              description: "If true, only returns the plan without creating worklogs (default: true for safety)",
+            },
+            mondayMeetingIssue: {
+              type: "string",
+              description: `Jira issue for Monday team meeting (default: ${DEFAULT_MONDAY_MEETING_ISSUE})`,
+            },
+          },
+          required: ["weekStart"],
+        },
+      },
     ],
   };
 });
@@ -385,6 +418,66 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "tempo_generate_timesheet": {
+        const rawParams = args as {
+          weekStart: string;
+          gitAuthor?: string;
+          projectsDir?: string;
+          dryRun?: boolean;
+          mondayMeetingIssue?: string;
+        };
+
+        // Apply defaults - use JIRA_EMAIL as git author (same for all devs)
+        const params = {
+          weekStart: rawParams.weekStart,
+          gitAuthor: rawParams.gitAuthor || JIRA_EMAIL!,
+          projectsDir: rawParams.projectsDir || DEFAULT_PROJECTS_DIR,
+          dryRun: rawParams.dryRun ?? true, // Default to dry run for safety
+          mondayMeetingIssue: rawParams.mondayMeetingIssue || DEFAULT_MONDAY_MEETING_ISSUE,
+        };
+        if (!params.projectsDir) {
+          throw new Error("projectsDir is required. Set DEFAULT_PROJECTS_DIR env var or provide it in the request.");
+        }
+
+        const result = await tempoClient.generateTimesheet(params);
+
+        // Format output
+        let output = `📅 Timesheet for week starting ${params.weekStart}\n`;
+        output += `📁 Scanned: ${params.projectsDir}\n`;
+        output += `👤 Author: ${params.gitAuthor}\n`;
+        output += `${params.dryRun ? "🔍 DRY RUN - No worklogs created\n" : ""}\n`;
+
+        for (const day of result.days) {
+          output += `\n--- ${day.dayOfWeek} (${day.date}) - ${day.totalHours.toFixed(2)}h ---\n`;
+          if (day.entries.length === 0) {
+            output += "  No entries\n";
+          } else {
+            for (const entry of day.entries) {
+              output += `  ${entry.issueKey}: ${entry.hours.toFixed(2)}h - ${entry.description}\n`;
+            }
+          }
+        }
+
+        if (result.errors.length > 0) {
+          output += `\n⚠️ Warnings/Errors:\n`;
+          for (const error of result.errors) {
+            output += `  - ${error}\n`;
+          }
+        }
+
+        if (!params.dryRun) {
+          output += `\n✅ Created ${result.worklogsCreated} worklogs`;
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: output,
+            },
+          ],
+        };
+      }
 
       default:
         throw new Error(`Unknown tool: ${name}`);

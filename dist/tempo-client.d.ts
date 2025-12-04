@@ -50,6 +50,37 @@ export interface UpdateWorklogParams {
     role?: string;
     accountKey?: string;
 }
+export interface GitCommit {
+    hash: string;
+    date: string;
+    message: string;
+    issueKeys: string[];
+    project: string;
+}
+export interface TimesheetDay {
+    date: string;
+    dayOfWeek: string;
+    entries: TimesheetEntry[];
+    totalHours: number;
+}
+export interface TimesheetEntry {
+    issueKey: string;
+    hours: number;
+    description: string;
+    project: string;
+}
+export interface GenerateTimesheetParams {
+    weekStart: string;
+    gitAuthor: string;
+    projectsDir: string;
+    dryRun?: boolean;
+    mondayMeetingIssue?: string;
+}
+export interface TimesheetResult {
+    days: TimesheetDay[];
+    worklogsCreated: number;
+    errors: string[];
+}
 export declare class TempoClient {
     private tempoToken;
     private jiraToken;
@@ -82,5 +113,21 @@ export declare class TempoClient {
     createWorklog(params: CreateWorklogParams): Promise<TempoWorklog>;
     updateWorklog(params: UpdateWorklogParams): Promise<TempoWorklog>;
     deleteWorklog(worklogId: string): Promise<void>;
+    /**
+     * Scan a directory for git repositories
+     */
+    scanGitRepos(projectsDir: string): string[];
+    /**
+     * Extract commits from a git repo for a specific date range and author
+     */
+    getGitCommits(repoPath: string, startDate: string, endDate: string, author: string): GitCommit[];
+    /**
+     * Generate a client-friendly description from commit messages
+     */
+    private generateDescription;
+    /**
+     * Generate timesheet from git commits
+     */
+    generateTimesheet(params: GenerateTimesheetParams): Promise<TimesheetResult>;
 }
 //# sourceMappingURL=tempo-client.d.ts.map
