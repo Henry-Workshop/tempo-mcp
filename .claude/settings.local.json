@@ -13,7 +13,8 @@
       "WebSearch",
       "Bash(npm install:*)",
       "Bash(npm uninstall:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "mcp__tempo-mcp__tempo_delete_worklog"
     ],
     "deny": [],
     "ask": []

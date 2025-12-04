@@ -1055,8 +1055,8 @@ class TempoClient {
             // Calculate available time (8h - meetings)
             let availableMinutes = 8 * 60; // 480 minutes
             // Daily sprint meeting (15 min) - will be added to main project
-            const sprintMeetingMinutes = 15;
-            availableMinutes -= sprintMeetingMinutes;
+            // Meeting times now from calendar
+            // Deducted based on actual calendar events
             // Monday: additional 15 min for BS-14
             if (dayOfWeek === "Monday") {
                 const mondayMeetingMinutes = 15;
@@ -1137,29 +1137,57 @@ class TempoClient {
                     });
                     timesheetDay.totalHours += hours;
                 }
-                // Add daily standup to main project's Sprint Meetings issue
-                if (mainProject) {
-                    const sprintIssue = await this.findSprintMeetingsIssue(mainProject);
-                    if (sprintIssue) {
-                        timesheetDay.entries.push({
-                            issueKey: sprintIssue,
-                            hours: sprintMeetingMinutes / 60,
-                            description: "Daily standup",
-                            project: mainProject,
-                        });
-                        timesheetDay.totalHours += sprintMeetingMinutes / 60;
+                // Sprint meetings detected from calendar below
+            }
+            // Add sprint/project meetings from calendar
+            const dayCalendarEvents = await this.getCalendarEvents(date, date);
+            for (const event of dayCalendarEvents) {
+                const titleLower = event.title.toLowerCase();
+                const isSprintMeeting = /daily|standup|stand-up|sprint|planning|retro|refinement|grooming|sync|réunion|bamboo|infusion/.test(titleLower);
+                if (!isSprintMeeting)
+                    continue;
+                // Detect project from title or attendees
+                const projectMatch = event.title.match(/([A-Z]{2,})/);
+                let projectKey = projectMatch ? projectMatch[1] : "";
+                if (!projectKey) {
+                    for (const att of event.attendees) {
+                        const co = att.match(/@([^.]+)/)?.[1]?.toLowerCase();
+                        if (co) {
+                            const p = await this.findProjectByCompany(co);
+                            if (p) {
+                                projectKey = p.key;
+                                break;
+                            }
+                        }
                     }
                 }
-                // Add Monday team sync (BS-14)
-                if (dayOfWeek === "Monday") {
-                    timesheetDay.entries.push({
-                        issueKey: mondayMeetingIssue,
-                        hours: 0.25, // 15 minutes
-                        description: "Weekly sync - weekend recap",
-                        project: mondayMeetingIssue.split("-")[0],
-                    });
-                    timesheetDay.totalHours += 0.25;
+                if (!projectKey)
+                    projectKey = /bamboo|infusion|team/.test(titleLower) ? "BS" : (mainProject || "BS");
+                const sprintIssue = await this.findSprintMeetingsIssue(projectKey);
+                const targetIssue = sprintIssue || projectKey + "-1";
+                let desc = "Meeting";
+                if (/daily|standup/.test(titleLower))
+                    desc = "Daily standup";
+                else if (/planning/.test(titleLower))
+                    desc = "Sprint planning";
+                else if (/retro/.test(titleLower))
+                    desc = "Rétrospective";
+                else if (/refinement|grooming/.test(titleLower))
+                    desc = "Raffinement";
+                else if (/infusion/.test(titleLower))
+                    desc = "Infusion";
+                else if (/bamboo|team/.test(titleLower))
+                    desc = "Team sync";
+                else
+                    desc = this.simplifyEmailSubject(event.title);
+                const existingEntry = timesheetDay.entries.find(e => e.issueKey === targetIssue);
+                if (existingEntry) {
+                    existingEntry.hours += event.durationMinutes / 60;
                 }
+                else {
+                    timesheetDay.entries.push({ issueKey: targetIssue, hours: event.durationMinutes / 60, description: desc, project: projectKey });
+                }
+                timesheetDay.totalHours += event.durationMinutes / 60;
             }
             // Add email-based tasks (0.25h each)
             const dayEmailTasks = emailTasksByDate.get(date) || [];
