@@ -1150,8 +1150,6 @@ class TempoClient {
             if (dayCommits.length === 0) {
                 // No commits for this day
                 result.errors.push(`No commits found for ${dayOfWeek} (${date})`);
-                result.days.push(timesheetDay);
-                continue;
             }
             // Group commits by issue key and track lines changed per project
             const issueCommits = new Map();
